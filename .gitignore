@@ -1,8 +1,3 @@
+.vs
+.vscode
 *.class
-flat-template.java
-flat-template.*
-typechecker-template.grace
-test.grace
-/*.grace
-!/wg.grace
-/java/*.grace
