@@ -6,8 +6,8 @@
 import "collections" as collections
 
 // Defined custom exceptions. Usage: TypeError.raise "message"
-def TypeError = Exception.refine "Type Error"
-def FailedError = Exception.refine "Failed Error"
+def TypeError = Exception.refine "TypeError"
+def FailedError = Exception.refine "FailedError"
 
 
 //
@@ -139,7 +139,7 @@ class NewMethod(nm, params, rType) {
     // Reuses argument subtype check but raises error instead of returning false.
     method checkArguments(args) {
         if (!subtypeArguments(args)) then {
-            TypeError.raise "Method arguments must be {parameters.map { a -> a.name} } not {args.map { a -> a.name} }."
+            TypeError.raise "Method {name} ({parameters} -> {returnType}) arguments must be '{parameters.map { a -> a.name} }' not '{args.map { a -> a.name} }'"
         }
     }
 }
@@ -174,14 +174,12 @@ class AnyType(nm) {
 
     // I want it to throw an error if a method doesn't exist usually. Only used for subtype checking.
     method hasMethod(name) {
-        methods.contains { 
-            m -> m.name == name 
-        } 
+        methods.contains { m -> m.name == name } 
     }
 
     method getMethod(nm) {
-        methods.do {
-            m -> if (m.name == nm) then { return m }
+        methods.do { m -> 
+            if (m.name == nm) then { return m } 
         }
         TypeError.raise "Method {nm} does not exist for {name}"
     }
@@ -364,13 +362,14 @@ class DotRequestNode(rec, meth, args, generics) {
             a.inferType(env) 
         }
 
-        // Create expected type that the method with arguments to compare against the receiver.
-        def neededType = AnyType("DotReq Type") // TODO maybe throw errors in subtype so this error message is more specific. Or make it have type ++(1)String not ++(1).
-        def returnType = receiverType.getMethod(methodName).returnType
-        neededType.addMethod(NewMethod(methodName, argumentTypes, returnType))
-        // Check the inferred method matches what is expected.
-        receiver.checkType(env, neededType)
-        return returnType
+        // Directly check the reciever type has this method.
+        if (!receiverType.hasMethod(methodName)) then {
+            TypeError.raise "No method called '{methodName}' on {receiverType.asString}"
+        }
+        // Check the argument types match the method parameter types.
+        def targetMethod = receiverType.getMethod(methodName)
+        targetMethod.checkArguments(argumentTypes)
+        return targetMethod.returnType
     }
 
     // Checking the dot request return type (calculated in inferType).
@@ -410,7 +409,7 @@ class ObjectNode(bdy, anns) {
 
         methods.do { m ->
             def methType = m.inferType(deeperEnv)
-            m.checkType(env, methType)
+            m.checkType(deeperEnv, methType)
             // print "Object body Type: {bodyType.asString}"
         }
 
@@ -486,6 +485,7 @@ class Environment(par) {
     }
 
     method findType(expr) is override {
+        // TODO
         //if (expr.name == "lexical request") then {
             // Extract method name without the argument count label e.g. "(1)"
             //def methodName = expr.methodName
@@ -589,9 +589,9 @@ method assertFails(ast) {
         ast.checkType(Environment(BaseEnvironment), unknownType)
         FailedError.raise "No TypeError"
     } catch { e : TypeError ->
-        print "PASSED: Test {testNum} threw successfully {e}"
+        print "PASSED: Test{testNum} successfully threw -> {e}"
     } catch { e : FailedError ->
-        print "-FAILED-: Test {testNum} did not throw TypeError"
+        print "-FAILED-: Test{testNum} did not throw TypeError"
     }
     testNum := testNum + 1
 }
@@ -600,9 +600,9 @@ method assertFails(ast) {
 method assertPasses(ast) {
     try {
         ast.checkType(Environment(BaseEnvironment), unknownType)
-        print "PASSED: Test {testNum} did not throw TypeError"
+        print "PASSED: Test{testNum} did not throw TypeError"
     } catch { e : TypeError ->
-        print "-FAILED-: Test {testNum} unexpectedly threw {e}"
+        print "-FAILED-: Test{testNum} unexpectedly threw -> {e}"
     }
     testNum := testNum + 1
 }
@@ -624,7 +624,7 @@ assertPasses(o0C(o1N(l0R("true(0)",nil,nil)),nil))
 
 // TEST 4
 // !false
-o0C(o1N(d0R(l0R("false(0)",nil,nil),"prefix!(0)",nil,nil)),nil)
+assertPasses(o0C(o1N(d0R(l0R("false(0)",nil,nil),"prefix!(0)",nil,nil)),nil))
 
 // TEST 5
 // 3 + "hi"

@@ -1,21 +1,21 @@
-(Compile Interpreter) Reset: `Get-ChildItem -Recurse -Filter *.class | Remove-Item`
+(Compile Interpreter in `wg` directory)
 ```
-javac -cp wg/java/ wg/java/nz/mwh/wg/Start.java
+javac -cp java/ java/nz/mwh/wg/Start.java
 ```
 
-(Run Grace script)
+(Run Grace script, make sure to use LF line endings)
 ```
-java -cp wg/java/ nz.mwh.wg.Start wg/TypeChecker.grace
+java -cp java/ nz.mwh.wg.Start TypeChecker.grace
 ```
 
 (Print longform AST)
 ```
-java -cp wg/java/ nz.mwh.wg.Start -p wg/TypeChecker.grace
+java -cp java/ nz.mwh.wg.Start -p TypeChecker.grace
 ```
 
-(Print concise AST, put script in test.grace in wg folder using `getFileContents "wg/test.grace"` in wg.grace)
+(Print concise AST, put script in test.grace using wg.grace: `getFileContents "test.grace"`)
 ```
-java -cp wg/java/ nz.mwh.wg.Start wg/wg.grace
+java -cp java/ nz.mwh.wg.Start wg.grace
 ```
 
 TypeChecker.grace is the main file, it imports collections.grace.  
