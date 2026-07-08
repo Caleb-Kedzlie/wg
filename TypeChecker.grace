@@ -23,18 +23,7 @@ method c0N(h, t) { // Like linked list, head appends to the front of the tail li
     return t
 }
 
-// Empty AST list. Uses collections.list method syntax.
-//def nil = object {
-//    def name is public = "nil"
-//    method size { 0 }
-//    method at(index) { nilHasNoItems }
-    // Nil can add to make one element list. e.g. c0N(h2, c0N(h1, nil)) -> c0N(h2, list[h1]) -> list[h2, h1]
-//    method add(value) { collections.list[v] }
-//    method add(value) at(i) { add(value) } // Adds to start.
-//    method do(b) { nilCannotDo }
-//    method asString { "" }
-//    method first { return unknownType }
-//}
+// Empty AST list. 
 method nil {
     return collections.list []
 }
@@ -44,13 +33,18 @@ method nil {
 method n0M(v) { LiteralNode("number value", v, numberType) }
 method s0L(v) { LiteralNode("string value", v, stringType) }
 
-// Interpolated string
-//method i0S(prefix, expr, suffix) {}
+// Interpolated string for formatting. e.g. "price is {y} dollars." -> prefix="price is ", expr=y, and suffix=" dollars."
+method i0S(prefix, expr, suffix) { InterpolatedStringNode(prefix, expr, suffix) }
 
-// SafeStr for formatting special characters with prefix/suffix. Intuition: prefix.++(expr.asString).++(suffix)
+// SafeStr for formatting special characters with prefix/suffix. Intuition: prefix.++(expr).++(suffix)
 method s4F(prefix, expr, suffix) {
-    DotRequestNode(
-        DotRequestNode(prefix, "++(1)", o1N(DotRequestNode(expr, "asString(0)", nil, nil)), nil),
+    // Check if it is a special character, if so then we can use stringType directly.
+    if (!isSpecialChar(expr)) then { 
+        TypeError.raise "'{expr}' is not a special character expression in the safe String" 
+    }
+    // Check that prefix ++ stringType ++ suffix are all valid types for those methods.
+    return DotRequestNode(
+        DotRequestNode(prefix, "++(1)", o1N(stingType), nil),
         "++(1)", 
         o1N(suffix), 
         nil)
@@ -556,21 +550,51 @@ class BaseEnvironment {
 }
 
 
+// Intepolate/format variables inside strings with curly brace notation. e.g. "x = {x}"
+class InterpolatedStringNode(pre, expr, suff) {
+    def name is public = "string interpolation"
+    def prefix is public = pre
+    def expression is public = expr
+    def suffix is public = suff
+
+    // The resulting type is a standard string.
+    method inferType(env) {
+        return stringType
+    }
+
+    method checkType(env, expected) {
+        def actual = self.inferType(env)
+        if (!expected.subtype(actual)) then {
+            TypeError.raise "'{actual.name} ({actual.methods.join(", ")})' is not a subtype of '{expected.name} ({expected.methods.join(", ")})' for interpolated string" 
+        }
+    }
+}
+
+
 // Other AST for special character constants.
-def c9B = "\\"
 def c9D = "$"
-def c9S = "*"
-def c9L = "\{"
+def c9B = "\\"
+def c9Q = "\""
 def c9N = "\n"
 def c9R = "\r"
-def c9Q = "\""
+def c9L = "\{" // Right brace not needed, as it does not begin string variable interpolation.
+def c9S = "*"
 def c9T = "~"
-def c9C = "^"
 def c9G = "`"
+def c9C = "^"
 def c9A = "@"
 def c9P = "%"
 def c9H = "#"
 def c9E = "!"
+
+// To check if special character is in SafeString.
+def specialChars = collections.list [
+    c9B, c9D, c9S, c9L, c9N, c9R, c9Q, 
+    c9T, c9C, c9G, c9A, c9P, c9H, c9E
+]
+method isSpecialChar(char) {
+    specialChars.contains { c -> c == char } 
+}
 
 
 //
@@ -591,7 +615,7 @@ method assertFails(ast) {
     } catch { e : TypeError ->
         print "PASSED: Test{testNum} successfully threw -> {e}"
     } catch { e : FailedError ->
-        print "-FAILED-: Test{testNum} did not throw TypeError"
+        print "-FAILED-: Test{testNum} did not throw a TypeError"
     }
     testNum := testNum + 1
 }
@@ -600,7 +624,7 @@ method assertFails(ast) {
 method assertPasses(ast) {
     try {
         ast.checkType(Environment(BaseEnvironment), unknownType)
-        print "PASSED: Test{testNum} did not throw TypeError"
+        print "PASSED: Test{testNum} did not throw a TypeError"
     } catch { e : TypeError ->
         print "-FAILED-: Test{testNum} unexpectedly threw -> {e}"
     }
