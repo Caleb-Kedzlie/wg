@@ -250,18 +250,64 @@ class LiteralNode(nm, v, lit) {
     method checkType(env, expected) { // Expected and Actual are AnyType literals.
         def actual = self.inferType(env)
         if (!expected.subtype(actual)) then {
-            TypeError.raise "{actual.name} ({actual.methods.join(", ")}) is not a subtype of {expected.name} ({expected.methods.join(", ")})" 
+            TypeError.raise "'{actual.name} ({actual.methods.join(", ")})' is not a subtype of '{expected.name} ({expected.methods.join(", ")})'" 
         }
     }
 }
 
+
 // TODO Def should be treated differently to Var, this is placeholder for some initial functionality.
-method DefNode(nm, decType, annotations, val) { 
+//method DefNode(nm, decType, annotations, val) { 
     // Needs name to distinguish empty list (nil) from a present type.
-    if (val.name == "list") then {
-        TypeError.raise "Def needs initial value"
-    } else {
-        return VarNode(nm, decType, annotations, o1N(val)) // In def the AST generator doesn't wrap val with a list, but it does in var. TODO ask about this.
+//    if ((val.name == "list") && (val.size == 0)) then {
+//        TypeError.raise "Def needs initial value"
+//    } else {
+//        return VarNode(nm, decType, annotations, o1N(val))
+//    }
+//}
+
+
+// Def declarations are immutable. You can get but not assign them.
+class DefNode(nm, decType, annotations, val) {
+    def name is public = "def declaration"
+    def declaredName is public = nm
+    def declaredType is public = if (decType.size > 0) then { decType.first } else { unknownType }
+    def value is public = if ((val.name == "list") && (val.size > 0)) then { val.first } elseif {val.name == "list"} then { unknownType } else { val }
+
+    method inferType(env) {
+        // Def needs initial value, so if it is nil (uses unknownType), raise TypeError.
+        if (value.name == "Unknown") then {
+            TypeError.raise "Def needs initial value"
+        }
+
+        var varType := declaredType
+        if (varType.name != "Unknown") then {
+            varType := env.findType(varType)
+        }
+        if (value.name != "Unknown") then {
+            def valueType = value.inferType(env)
+            if (!varType.subtype(valueType)) then {
+                TypeError.raise "Actual '{valueType.name}' is not a subtype of '{varType.name}'"
+            }
+        }
+        return doneType
+    }
+
+    method checkType(env, expected) {
+        def actual = inferType(env)
+        if (!expected.subtype(actual)) then {
+            TypeError.raise "Def declaration invalid, expected: '{expected.name}', actual: '{actual.name}'"
+        }
+    }
+
+    method addToEnvironment(env) {
+        var varType := declaredType
+        if (varType.name != "Unknown") then {
+            varType := env.findType(varType)
+        }
+        // Get for the variable i.e. "x" but no assignment like "x := 3" or "x = 3", after intially set.
+        def meth = NewMethod(declaredName ++ "(0)", nil, varType)
+        env.addMethod(meth)
     }
 }
 
@@ -283,7 +329,7 @@ class VarNode(nm, decType, annotations, val) {
         if (value.name != "Unknown") then {
             def valueType = value.inferType(env)
             if (!varType.subtype(valueType)) then {
-                TypeError.raise "Actual {valueType.name} is not a subtype of {varType.name}"
+                TypeError.raise "Actual '{valueType.name}' is not a subtype of '{varType.name}'"
             }   
             // Could use tryCatch if I want better message: TypeError.raise "The var declaration '{declaredName}' needs type: {varType} was: {valueType}"
         }
@@ -293,7 +339,7 @@ class VarNode(nm, decType, annotations, val) {
     method checkType(env, expected) {
         def actual = inferType(env)
         if (!expected.subtype(actual)) then {
-            TypeError.raise "Variable declarion invalid"
+            TypeError.raise "Var declarion invalid, expected: '{expected.name}', actual: '{actual.name}'"
         }
     }
 
