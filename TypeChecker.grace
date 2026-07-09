@@ -15,6 +15,29 @@ def FailedError = Exception.refine "FailedError"
 //
 
 
+// Other AST for special character constants.
+def c9D = "$"
+def c9B = "\\"
+def c9Q = "\""
+def c9N = "\n"
+def c9R = "\r"
+def c9L = "\{" // Right brace not needed, as it does not begin a string format interpolation.
+def c9S = "*"
+def c9T = "~"
+def c9G = "`"
+def c9C = "^"
+def c9A = "@"
+def c9P = "%"
+def c9H = "#"
+def c9E = "!"
+
+// To check if special character is in SafeString.
+def specialChars = collections.list [
+    c9B, c9D, c9S, c9L, c9N, c9R, c9Q, 
+    c9T, c9C, c9G, c9A, c9P, c9H, c9E
+]
+
+
 // Short form AST to instantiate list nodes for the type checker. These names are strict.
 method o1N(v) { collections.list [v] } // These need nil for the loops to end if nil reached.
 method c2N(a, b) { collections.list [a, b] }
@@ -22,11 +45,8 @@ method c0N(h, t) { // Like linked list, head appends to the front of the tail li
     t.add(h) at(1)
     return t
 }
-
-// Empty AST list. 
-method nil {
-    return collections.list []
-}
+// Empty AST. Formerly used a class, but an empty list is sufficient.
+method nil { return collections.list [] }
 
 
 // Short form AST to instantiate the basic types.
@@ -39,7 +59,7 @@ method i0S(prefix, expr, suffix) { InterpolatedStringNode(prefix, expr, suffix) 
 // SafeStr for formatting special characters with prefix/suffix. Intuition: prefix.++(expr).++(suffix)
 method s4F(prefix, expr, suffix) {
     // Check if it is a special character, if so then we can use stringType directly.
-    if (!isSpecialChar(expr)) then { 
+    if (!specialChars.contains { c -> c == expr }) then { 
         TypeError.raise "'{expr}' is not a special character expression in the safe String" 
     }
     // Check that prefix ++ stringType ++ suffix are all valid types for those methods.
@@ -258,7 +278,7 @@ class LiteralNode(nm, v, lit) {
 
 // TODO Def should be treated differently to Var, this is placeholder for some initial functionality.
 //method DefNode(nm, decType, annotations, val) { 
-    // Needs name to distinguish empty list (nil) from a present type.
+// Needs name to distinguish empty list (nil) from a present type.
 //    if ((val.name == "list") && (val.size == 0)) then {
 //        TypeError.raise "Def needs initial value"
 //    } else {
@@ -614,32 +634,6 @@ class InterpolatedStringNode(pre, expr, suff) {
             TypeError.raise "'{actual.name} ({actual.methods.join(", ")})' is not a subtype of '{expected.name} ({expected.methods.join(", ")})' for interpolated string" 
         }
     }
-}
-
-
-// Other AST for special character constants.
-def c9D = "$"
-def c9B = "\\"
-def c9Q = "\""
-def c9N = "\n"
-def c9R = "\r"
-def c9L = "\{" // Right brace not needed, as it does not begin string variable interpolation.
-def c9S = "*"
-def c9T = "~"
-def c9G = "`"
-def c9C = "^"
-def c9A = "@"
-def c9P = "%"
-def c9H = "#"
-def c9E = "!"
-
-// To check if special character is in SafeString.
-def specialChars = collections.list [
-    c9B, c9D, c9S, c9L, c9N, c9R, c9Q, 
-    c9T, c9C, c9G, c9A, c9P, c9H, c9E
-]
-method isSpecialChar(char) {
-    specialChars.contains { c -> c == char } 
 }
 
 
