@@ -1,6 +1,6 @@
 // ONLY ONCE: javac -cp wg/java/ wg/java/nz/mwh/wg/Start.java
 // java -cp wg/java/ nz.mwh.wg.Start TypeChecker.grace
-// Bidirectional because "inferType" deduces type bottom-up and "checkType" tests if an expression matches type top-down or raises error.
+// Bidirectional because "inferType" deduces type bottom-up and "checkType" tests if an expression matches type top-down or throws error.
 
 // Importing library collections.grace to use array lists instead of linked lists.
 import "collections" as collections
@@ -30,15 +30,13 @@ def c9A = "@"
 def c9P = "%"
 def c9H = "#"
 def c9E = "!"
-
 // To check if special character is in SafeString.
 def specialChars = collections.list [
     c9B, c9D, c9S, c9L, c9N, c9R, c9Q, 
     c9T, c9C, c9G, c9A, c9P, c9H, c9E
 ]
 
-
-// Short form AST to instantiate list nodes for the type checker. These names are strict.
+// Short form AST to instantiate list nodes for the type checker.
 method o1N(v) { collections.list [v] } // These need nil for the loops to end if nil reached.
 method c2N(a, b) { collections.list [a, b] }
 method c0N(h, t) { // Like linked list, head appends to the front of the tail list.
@@ -47,7 +45,6 @@ method c0N(h, t) { // Like linked list, head appends to the front of the tail li
 }
 // Empty AST. Formerly used a class, but an empty list is sufficient.
 method nil { return collections.list [] }
-
 
 // Short form AST to instantiate the basic types.
 method n0M(v) { LiteralNode("number value", v, numberType) }
@@ -77,7 +74,7 @@ method s4F(prefix, expr, suffix) {
 method d3F(name, dType, anns, value) { DefNode(name, dType, anns, value) }
 method v4R(name, dType, anns, value) { VarNode(name, dType, anns, value) }
 
-// Assignment of a variable (defined by var). Uses lexical or dot request. No class needed.
+// Reassignment of a variable (defined by var). Uses lexical or dot request. No class needed.
 //method a5N(lhs, rhs) {}
 
 // Type and interface declaration.
@@ -102,7 +99,7 @@ method d0R(receiver, name, args, genericParams) { DotRequestNode(receiver, name,
 method o0C(body, anns) { ObjectNode(body, anns) }
 
 // Return statement for a method.
-//method r3T(value) { ReturnNode(value) }
+method r3T(value) { ReturnNode(value) }
 
 // Parameter type identifier for a method signature part. e.g. foo(a : String).
 //method i0D(name, dType) { IdentifierNode(name, dType) }
@@ -116,7 +113,7 @@ method c0M(text) { CommentNode(text) }
 // Dialect Statement that extends the Grace language using source string. e.g. dialect "name"
 //method d0S(source) { DialectNode(source) }
 
-// Lineup infers/executes each element between commas: [ 1+1, f(a), print 3 ]
+// Lineup infers/executes each element between semicolons: 1+1; f(a); print 3
 //method l0N(elems) { LineupNode(elems) }
 
 
@@ -150,7 +147,7 @@ class NewMethod(nm, params, rType) {
         return true
     }
 
-    // Reuses argument subtype check but raises error instead of returning false.
+    // Reuses argument subtype check but throws error instead of returning false.
     method checkArguments(args) {
         if (!subtypeArguments(args)) then {
             TypeError.raise "Method {name} ({parameters} -> {returnType}) arguments must be '{parameters.map { a -> a.name} }' not '{args.map { a -> a.name} }'"
@@ -394,6 +391,7 @@ class LexicalRequestNode(meth, args, generics) {
         return meth.returnType
     }
 
+    // Checking the lexical request searched object type (calculated in inferType).
     method checkType(env, expected) {
         def actual = inferType(env)
         if (!expected.subtype(actual)) then {
@@ -422,7 +420,7 @@ class DotRequestNode(rec, meth, args, generics) {
             a.inferType(env) 
         }
 
-        // Directly check the reciever type has this method.
+        // Directly check the receiver type has this method.
         if (!receiverType.hasMethod(methodName)) then {
             TypeError.raise "No method called '{methodName}' on {receiverType.asString}"
         }
@@ -486,19 +484,55 @@ class ObjectNode(bdy, anns) {
 }
 
 
-
-
-
 // Excluded from the body of other types.
 class CommentNode(txt) {
     def name is public = "comment"
     def text is public = txt
 
-    method inferType(env) { unknownType } // May be unnecessary if all body lists remove comments.
-    method checkType(env, expected) {} // CheckType doesn't return but it throws error if invalid (comments always valid).
+    method inferType(env) { return unknownType } // May be unnecessary if all body lists remove comments.
+    method checkType(env, expected) {} // Comments always valid, so never throws error.
 }
 
 
+// Return statement in method bodies.
+class ReturnNode(val) {
+    def name is public = "return"
+    def value is public = val
+
+    // Infer the type of the value after the 'return' keyword.
+    method inferType(env) { 
+        return value.inferType(env) 
+    }
+
+    // Check the type of the value against an expected type.
+    method checkType(env, expected) {
+        def valueType = inferType(env)
+        if (!valueType.subtype(expected)) then {
+            TypeError.raise "Return statement value type: '{valueType.name}' not a subtype of expected type: '{expected.name}'"
+        }
+    }
+}
+
+
+// Intepolate/format variables inside strings with curly brace notation. e.g. "x is {x}"
+class InterpolatedStringNode(pre, expr, suff) {
+    def name is public = "string interpolation"
+    def prefix is public = pre
+    def expression is public = expr
+    def suffix is public = suff
+
+    // The resulting type is a standard string.
+    method inferType(env) {
+        return stringType
+    }
+
+    method checkType(env, expected) {
+        def actual = self.inferType(env)
+        if (!expected.subtype(actual)) then {
+            TypeError.raise "'{actual.name} ({actual.methods.join(", ")})' is not a subtype of '{expected.name} ({expected.methods.join(", ")})' for interpolated string" 
+        }
+    }
+}
 
 
 // Stores global and local variables. Mapping of variable names to values. Builds upon other environemtns to determine what object is currently Self. 
@@ -612,27 +646,6 @@ class BaseEnvironment {
         //    return booleanType
         //}
         TypeError.raise "Unexpected type: {name}"
-    }
-}
-
-
-// Intepolate/format variables inside strings with curly brace notation. e.g. "x = {x}"
-class InterpolatedStringNode(pre, expr, suff) {
-    def name is public = "string interpolation"
-    def prefix is public = pre
-    def expression is public = expr
-    def suffix is public = suff
-
-    // The resulting type is a standard string.
-    method inferType(env) {
-        return stringType
-    }
-
-    method checkType(env, expected) {
-        def actual = self.inferType(env)
-        if (!expected.subtype(actual)) then {
-            TypeError.raise "'{actual.name} ({actual.methods.join(", ")})' is not a subtype of '{expected.name} ({expected.methods.join(", ")})' for interpolated string" 
-        }
     }
 }
 
