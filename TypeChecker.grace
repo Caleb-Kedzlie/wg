@@ -1,5 +1,6 @@
-// ONLY ONCE: javac -cp wg/java/ wg/java/nz/mwh/wg/Start.java
-// java -cp wg/java/ nz.mwh.wg.Start TypeChecker.grace
+// TODO delete info.
+// COMPILE ONLY ONCE: javac -cp java/ java/nz/mwh/wg/Start.java
+// java -cp java/ nz.mwh.wg.Start TypeChecker.grace
 // Bidirectional because "inferType" deduces type bottom-up and "checkType" tests if an expression matches type top-down or throws error.
 
 // Importing library collections.grace to use array lists instead of linked lists.
@@ -33,18 +34,25 @@ def c9E = "!"
 // To check if special character is in SafeString.
 def specialChars = collections.list [
     c9B, c9D, c9S, c9L, c9N, c9R, c9Q, 
-    c9T, c9C, c9G, c9A, c9P, c9H, c9E
-]
+    c9T, c9C, c9G, c9A, c9P, c9H, c9E]
+
 
 // Short form AST to instantiate list nodes for the type checker.
-method o1N(v) { collections.list [v] } // These need nil for the loops to end if nil reached.
+method o1N(v) { collections.list [v] }
 method c2N(a, b) { collections.list [a, b] }
-method c0N(h, t) { // Like linked list, head appends to the front of the tail list.
+method c0N(h, t) { // Like a linked list, head appends to the front of the tail list.
     t.add(h) at(1)
     return t
 }
+
 // Empty AST. Formerly used a class, but an empty list is sufficient.
 method nil { return collections.list [] }
+// Check if an object is nil (empty list).
+method isNil(val) { 
+    // If not list avoid running 'size' method.
+    if (val.name != "list") then { return false }
+    return val.size == 0
+}
 
 // Short form AST to instantiate the basic types.
 method n0M(v) { LiteralNode("number value", v, numberType) }
@@ -61,7 +69,7 @@ method s4F(prefix, expr, suffix) {
     }
     // Check that prefix ++ stringType ++ suffix are all valid types for those methods.
     return DotRequestNode(
-        DotRequestNode(prefix, "++(1)", o1N(stingType), nil),
+        DotRequestNode(prefix, "++(1)", o1N(stringType), nil),
         "++(1)", 
         o1N(suffix), 
         nil)
@@ -132,15 +140,15 @@ class NewMethod(nm, params, rType) {
         return name
     }
 
-    // Check this methods parameters all subtype the checked args.
-    method subtypeArguments(args) {
+    // Check this methods parameters all subtype the sent args.
+    method assignableArguments(args) {
         // Check the number of arguments matches the parameters.
         if (args.size != parameters.size) then {
             return false
         }
-        parameters.zip(args) do { e1, e2 ->
+        parameters.zip(args) do { p, a ->
             // Checking if the param matches the argument type.
-            if (!e1.subtype(e2)) then {
+            if (!p.assignableFrom(a)) then {
                 return false
             }
         }
@@ -149,7 +157,7 @@ class NewMethod(nm, params, rType) {
 
     // Reuses argument subtype check but throws error instead of returning false.
     method checkArguments(args) {
-        if (!subtypeArguments(args)) then {
+        if (!assignableArguments(args)) then {
             TypeError.raise "Method {name} ({parameters} -> {returnType}) arguments must be '{parameters.map { a -> a.name} }' not '{args.map { a -> a.name} }'"
         }
     }
@@ -200,25 +208,25 @@ class AnyType(nm) {
     }
     
 
-    // Compare the other type with this type to check if matching/subtype.
-    method subtype(other) {
+    // Compare another type with this type to check if matching/subtype.
+    method assignableFrom(subtype) {
         // Unknown always subtypes and the same object subtypes.
-        if ((other.name == "Unknown") || (self == other)) then {
+        if ((subtype.name == "Unknown") || (self == subtype)) then {
             return true
         }
 
         methods.do { m ->
             // The subtype should at least have all methods of this type.
-            if (!other.hasMethod(m.name)) then {
+            if (!subtype.hasMethod(m.name)) then {
                 return false
             }
-            def otherMeth = other.getMethod(m.name)
-            // Compare the method params with the other type.
-            if (!m.subtypeArguments(otherMeth.parameters)) then {
-                // print "{m.name} invalid arguments ({otherMeth.parameters.join(", ")})"
+            def subtypeMeth = subtype.getMethod(m.name)
+            // Compare the method params with the subtype.
+            if (!m.assignableArguments(subtypeMeth.parameters)) then {
+                // print "{m.name} invalid arguments ({subtypeMeth.parameters.join(", ")})"
                 return false
             }
-            if (!m.returnType.subtype(otherMeth.returnType)) then {
+            if (!m.returnType.assignableFrom(subtypeMeth.returnType)) then {
                 // print "Invalid returnType {m.name}!"
                 return false
             }
@@ -233,7 +241,7 @@ class AnyType(nm) {
 def unknownType = object {
     def name is public = "Unknown"
 
-    method subtype(subtype) { return true }
+    method assignableFrom(subtype) { return true }
     method asString { return name }
     method addMethod(meth) { TypeError.raise "Unknown type cannot add methods"}
     method hasMethod(name) { return false }
@@ -266,22 +274,11 @@ class LiteralNode(nm, v, lit) {
 
     method checkType(env, expected) { // Expected and Actual are AnyType literals.
         def actual = self.inferType(env)
-        if (!expected.subtype(actual)) then {
-            TypeError.raise "'{actual.name} ({actual.methods.join(", ")})' is not a subtype of '{expected.name} ({expected.methods.join(", ")})'" 
+        if (!expected.assignableFrom(actual)) then {
+            TypeError.raise "'{actual.name} ({actual.methods.join(", ")})' is not a subtype of expected '{expected.name} ({expected.methods.join(", ")})'" 
         }
     }
 }
-
-
-// TODO Def should be treated differently to Var, this is placeholder for some initial functionality.
-//method DefNode(nm, decType, annotations, val) { 
-// Needs name to distinguish empty list (nil) from a present type.
-//    if ((val.name == "list") && (val.size == 0)) then {
-//        TypeError.raise "Def needs initial value"
-//    } else {
-//        return VarNode(nm, decType, annotations, o1N(val))
-//    }
-//}
 
 
 // Def declarations are immutable. You can get but not assign them.
@@ -289,40 +286,32 @@ class DefNode(nm, decType, annotations, val) {
     def name is public = "def declaration"
     def declaredName is public = nm
     def declaredType is public = if (decType.size > 0) then { decType.first } else { unknownType }
-    def value is public = if ((val.name == "list") && (val.size > 0)) then { val.first } elseif {val.name == "list"} then { unknownType } else { val }
+    def value is public = if (isNil(val)) then { unknownType } elseif {val.name == "list"} then { val.first } else { val }
 
     method inferType(env) {
         // Def needs initial value, so if it is nil (uses unknownType), raise TypeError.
         if (value.name == "Unknown") then {
             TypeError.raise "Def needs initial value"
         }
-
-        var varType := declaredType
-        if (varType.name != "Unknown") then {
-            varType := env.findType(varType)
-        }
-        if (value.name != "Unknown") then {
-            def valueType = value.inferType(env)
-            if (!varType.subtype(valueType)) then {
-                TypeError.raise "Actual '{valueType.name}' is not a subtype of '{varType.name}'"
-            }
+        // Find and compare value with declared type.
+        def expectedType = env.findType(declaredType)
+        def valueType = value.inferType(env)
+        if (!expectedType.assignableFrom(valueType)) then {
+            TypeError.raise "Actual '{valueType.name}' is not a subtype of '{expectedType.name}'"
         }
         return doneType
     }
 
     method checkType(env, expected) {
         def actual = inferType(env)
-        if (!expected.subtype(actual)) then {
-            TypeError.raise "Def declaration invalid, expected: '{expected.name}', actual: '{actual.name}'"
+        if (!expected.assignableFrom(actual)) then {
+            TypeError.raise "Def declaration invalid, expected '{expected.name}', actual '{actual.name}'"
         }
     }
 
     method addToEnvironment(env) {
-        var varType := declaredType
-        if (varType.name != "Unknown") then {
-            varType := env.findType(varType)
-        }
-        // Get for the variable i.e. "x" but no assignment like "x := 3" or "x = 3", after intially set.
+        def varType = env.findType(declaredType)
+        // Getter for the variable i.e. "x" or "x()", but no assignment like "x := 3" or "x = 3", after intially set.
         def meth = NewMethod(declaredName ++ "(0)", nil, varType)
         env.addMethod(meth)
     }
@@ -334,39 +323,30 @@ class VarNode(nm, decType, annotations, val) {
     def declaredName is public = nm
     // Nil makes empty lists so declaredType and value become unknownType.
     def declaredType is public = if (decType.size > 0) then { decType.first } else { unknownType } 
-    def value is public = if (val.size > 0) then { val.first } else { unknownType }
+    def value is public = if (isNil(val)) then { unknownType } else { val.first } // Always a list, unlike DefNode.
 
     method inferType(env) {
-        var varType := declaredType
         // Infer environment types that are not unknown.
-        if (varType.name != "Unknown") then {
-            varType := env.findType(varType)
-        }
-        // Check value is same type as declared if not unknown.
-        if (value.name != "Unknown") then {
-            def valueType = value.inferType(env)
-            if (!varType.subtype(valueType)) then {
-                TypeError.raise "Actual '{valueType.name}' is not a subtype of '{varType.name}'"
-            }   
-            // Could use tryCatch if I want better message: TypeError.raise "The var declaration '{declaredName}' needs type: {varType} was: {valueType}"
+        def expectedType = env.findType(declaredType)
+
+        // Check value is same type as declared. The unknownType always succeeds.
+        def valueType = value.inferType(env)
+        if (!expectedType.assignableFrom(valueType)) then {
+            TypeError.raise "The var declaration '{declaredName}' needs type: '{expectedType.name}' was: '{valueType.name}'"
         }
         return doneType
     }
 
     method checkType(env, expected) {
         def actual = inferType(env)
-        if (!expected.subtype(actual)) then {
+        if (!expected.assignableFrom(actual)) then {
             TypeError.raise "Var declarion invalid, expected: '{expected.name}', actual: '{actual.name}'"
         }
     }
 
     method addToEnvironment(env) {
-        var varType := declaredType
-        // Resolve types that are not unknown.
-        if (varType.name != "Unknown") then {
-            varType := env.findType(varType)
-        }
-        // Get and assign for the variable i.e. "x" and "x := 3"
+        def varType = env.findType(declaredType)
+        // Get and assign for the variable i.e. "x" or "x()", and "x := 3"
         def meth = NewMethod(declaredName ++ "(0)", nil, varType)
         def methAssign = NewMethod(declaredName ++ ":=(1)", o1N(varType), doneType)
         env.addMethod(meth)
@@ -380,7 +360,7 @@ class LexicalRequestNode(meth, args, generics) {
     def name is public = "lexical request"
     def methodName is public = meth
     def arguments is public = args
-    def genericParams is public = generics
+    def genericParams is public = generics // Unused currently.
 
     // Checks the method exists in the environment and returns the return type of it.
     method inferType(env) {
@@ -394,7 +374,7 @@ class LexicalRequestNode(meth, args, generics) {
     // Checking the lexical request searched object type (calculated in inferType).
     method checkType(env, expected) {
         def actual = inferType(env)
-        if (!expected.subtype(actual)) then {
+        if (!expected.assignableFrom(actual)) then {
             TypeError.raise "Lexical request {methodName} was {expected.name} wanted {actual.name}"
         }
     }
@@ -411,7 +391,7 @@ class DotRequestNode(rec, meth, args, generics) {
     def receiver is public = rec
     def methodName is public = meth
     def arguments is public = args
-    def genericParams is public = generics
+    def genericParams is public = generics // Unused currently.
 
     // Checks the method is in the receiver and returns the return type of it.
     method inferType(env) {
@@ -433,7 +413,7 @@ class DotRequestNode(rec, meth, args, generics) {
     // Checking the dot request return type (calculated in inferType).
     method checkType(env, expected) {
         def actual = inferType(env)
-        if (!expected.subtype(actual)) then {
+        if (!expected.assignableFrom(actual)) then {
             TypeError.raise "Dot request {receiver.name}.{methodName} was {expected.name} wanted {actual.name}"
         }
     }
@@ -456,16 +436,16 @@ method addDeclarations(env, body) {
 
 
 class ObjectNode(bdy, anns) {
-    def methods is public = bdy.without { x -> x.name == "comment" }
+    def body is public = bdy.without { x -> x.name == "comment" }
     def annotations is public = anns
 
     method inferType(env) {
         def deeperEnv = Environment(env)
-        addDeclarations(deeperEnv, methods) // Method (or variable) declarations.
+        addDeclarations(deeperEnv, body) // Method (or variable) declarations.
         // The self method of this object.
         deeperEnv.addMethod(NewMethod("self(0)", nil, deeperEnv.asType))
 
-        methods.do { m ->
+        body.do { m ->
             def methType = m.inferType(deeperEnv)
             m.checkType(deeperEnv, methType)
             // print "Object body Type: {bodyType.asString}"
@@ -477,7 +457,7 @@ class ObjectNode(bdy, anns) {
     // For the root object it compares against unknown type (always true). Otherwise, compares objects.
     method checkType(env, expected) {
         def envType = inferType(env) 
-        if (!expected.subtype(envType)) then {
+        if (!expected.assignableFrom(envType)) then {
             TypeError.raise "ObjectNode is not valid"
         }
     }
@@ -489,7 +469,7 @@ class CommentNode(txt) {
     def name is public = "comment"
     def text is public = txt
 
-    method inferType(env) { return unknownType } // May be unnecessary if all body lists remove comments.
+    method inferType(env) { return unknownType } // TODO May be unnecessary if all body lists remove comments.
     method checkType(env, expected) {} // Comments always valid, so never throws error.
 }
 
@@ -504,11 +484,11 @@ class ReturnNode(val) {
         return value.inferType(env) 
     }
 
-    // Check the type of the value against an expected type.
+    // Check the type of the value against an expected type. TODO Send env.returnType as expected.
     method checkType(env, expected) {
         def valueType = inferType(env)
-        if (!valueType.subtype(expected)) then {
-            TypeError.raise "Return statement value type: '{valueType.name}' not a subtype of expected type: '{expected.name}'"
+        if (!expected.assignableFrom(valueType)) then {
+            TypeError.raise "Return statement value type: '{valueType.name}' not a subtype of expected type '{expected.name}'"
         }
     }
 }
@@ -528,11 +508,36 @@ class InterpolatedStringNode(pre, expr, suff) {
 
     method checkType(env, expected) {
         def actual = self.inferType(env)
-        if (!expected.subtype(actual)) then {
+        if (!expected.assignableFrom(actual)) then {
             TypeError.raise "'{actual.name} ({actual.methods.join(", ")})' is not a subtype of '{expected.name} ({expected.methods.join(", ")})' for interpolated string" 
         }
     }
 }
+
+
+class MethodNode(params, rType, anns, bdy) {
+    def name is public = "method declaration"
+    def parameters is public = params
+    def rType is public = if (isNil(rType)) then { unknownType } else { rType } // Unknown if nil.
+    def annotations is public = anns
+    def body is public = bdy.without { x -> x.name == "comment" } // Remove comments from body.
+
+    // The method declaration itself returns the done type.
+    method inferType(env) { 
+        return doneType 
+    }
+
+    method checkType(env, expected) {
+        def returnT = env.findType(returnType)
+        // Construct deeper environment which returns this rType.
+        def deeperEnv = Environment(env)
+        deeperEnv.methodReturn(rType)
+        // Add the parameters to this environment
+        // Add the body declarations to this environment
+        // Check the last expression against the return type as it will be returned.
+    }
+}
+
 
 
 // Stores global and local variables. Mapping of variable names to values. Builds upon other environemtns to determine what object is currently Self. 
@@ -540,39 +545,39 @@ class InterpolatedStringNode(pre, expr, suff) {
 class Environment(par) {
     inherit BaseEnvironment
     def parent is public = par
-    var methods is public := nil // Calling methods or getting variables.
+    var methods is public := nil // Calling methods or variable getters.
     var types is public := nil // For type declaration nodes.
-    var isMethod := false
-    var returnType := unknownType
+    // These two are used if this environment itself is a method.
+    var returnType := nil
+    var methodScope is public := ""
 
-
+    // Add a method to the environment at the start of the list to mask outer methods with the same name.
     method addMethod(meth) is override {
-        // Add at the start of list to mask less deep methods.
+        // TODO possibly handle throwing error if adding the same named method.
         methods.add(meth) at(1)
     }
     
+    // Search for methods with matching name. Finds first (masking of outer environments).
     method findMethod(name) is override {
-        // Search for methods with matching name. Finds first (masking of outer environments).
         methods.do { n ->
             if (n.name == name) then {
                 return n
             }
         }
-        // Couldn't find in its own environment, so check parent.
+        // Could not find in its own environment, so check parent.
         return parent.findMethod(name)
     }
 
-    
-    // If this environment is for the scope of a method then it must return.
-    method isMethod(rType, scope) { // TODO call this function inside MethodNode (m0D).
-        isMethod := true
+    // Setup method return type which is recursively looked up. Called inside MethodNode (m0D).
+    method methodReturn(rType, scp) {
         returnType := rType
-        // TODO store the scope and add a method to get it to allow for more specific error messages.
+        methodScope := scp
     }
 
-
+    // If this environment is within a method then it recursively finds the return type.
     method returnType is override {
-        if (isMethod) then {
+        // Return type is set if not nil (can be unknownType).
+        if (!isNil(returnType)) then {
             return returnType
         }
         return parent.returnType
@@ -581,7 +586,6 @@ class Environment(par) {
     method findType(expr) is override {
         // TODO
         //if (expr.name == "lexical request") then {
-            // Extract method name without the argument count label e.g. "(1)"
             //def methodName = expr.methodName
             //def name = methodName.substringFrom(1)to(methodName.size - 3)
             
@@ -602,7 +606,7 @@ class Environment(par) {
         methods.do { x ->
             envType.addMethod(x)
         }
-        envType
+        return envType
     }
 }
 
@@ -625,12 +629,13 @@ class BaseEnvironment {
     }
 
     method returnType {
-        TypeError.raise "Invalid return statement at top level"
+        TypeError.raise "Invalid return statement as there is no enclosing method"
     }
 
     // Find a literal type object via the name.
     method findType(expr) {
         var name := expr.name
+        // Handle lexical requests.
         if (name == "lexical request") then {
             // Extract method name without argument count label e.g. "String" not "String(0)"
             def methName = expr.methodName

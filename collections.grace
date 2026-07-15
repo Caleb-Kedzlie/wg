@@ -8,7 +8,7 @@ def OutOfRange = Exception.refine "OutOfRange"
 // l.add "X" at 2  -- adds "X" at index 2, moving others
 // list(iterable)  -- copies elements from iterable into a new list
 class list(elems) {
-    def name = "list" // TODO tell him that I added this single line to be able to distinguish empty list (nil) from other AST.
+    def name = "list" // I added this single line to be able to distinguish empty list (nil) from other AST.
     var arraySize := if (elems.size > 5) then { elems.size * 2} else { 10 }
     var elements := primitiveArray.new(arraySize)
     var itemSize := 0
