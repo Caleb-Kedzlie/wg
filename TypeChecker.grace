@@ -92,7 +92,7 @@ method v4R(name, dType, anns, value) { VarNode(name, dType, anns, value) }
 // Method signature (in interfaces).
 //method m0S(parts, rType) { MethodSignatureNode(parts, rType) }
 // Method declaration (includes annotations and body).
-//method m0D(parts, rType, anns, body) { MethodNode(parts, rType, anns, body) }
+method m0D(parts, rType, anns, body) { MethodNode(parts, rType, anns, body) }
 
 // Implicit/lexical request of variable/methods.
 method l0R(name, args, genericParams) { LexicalRequestNode(name, args, genericParams) }
@@ -476,7 +476,7 @@ class CommentNode(txt) {
 
 // Return statement in method bodies.
 class ReturnNode(val) {
-    def name is public = "return"
+    def name is public = "return statement"
     def value is public = val
 
     // Infer the type of the value after the 'return' keyword.
@@ -520,7 +520,7 @@ class MethodNode(parts, rType, anns, bdy) {
     def name is public = "method declaration"
     // Merge all the method parts. e.g. "foo(1)bar(2)" from "method foo(a) bar(b, c)"
     def declaredName is public = parts.map { part -> "{part.declaredName}({part.parameters.size})" }.join("")
-    def parameters is public = parts.flatMap { part -> part.parameters } // Merge into single list.
+    def parameters is public = parts.flatMap { part -> part.parameters } // Merges into single list.
 
     // Store return type, unknownType if nil.
     def lexicalReturnType is public = if (isNil(rType)) then { unknownType } else { rType } 
@@ -545,11 +545,17 @@ class MethodNode(parts, rType, anns, bdy) {
             def paramType = env.findType(param.declaredType) // unknownType handled in findType.
             deeperEnv.addMethod(arglessMeth(param.declaredName ++ "(0)", paramType))
         }
-
         // Add the body declarations to this environment
+        addDeclarations(deeperEnv, body)
 
-
-        // Check the last expression against the return type as it will be returned.
+        // Check the last body expression (no need for explicit return) against the return type.
+        var finalExpr := nil
+        body.do { expr ->
+            expr.checkType(deeperEnv, unknownType) // Send checks down the children.
+            // Track last expression so far.
+            finalExpr := expr.inferType(deeperEnv)
+            if (expr.name == "return statement") then {} // TODO throw error if return that is not final expression.
+        }
 
         // Check expected is doneType.
         def actual = inferType(env)
@@ -557,14 +563,24 @@ class MethodNode(parts, rType, anns, bdy) {
             TypeError.raise "Method expected result '{expected.name}', actually got '{actual.name}'"
         }
     }
+
+    // Add this method expression to the current environment.
+    method addToEnvironment(env) {
+        env.addMethod(methodFormat(env)) 
+    }
+
+    // TODO implement a method to convert this Node to the NewMethod(nm, params, rType) format. Reused in InterfaceNode.
+    method methodFormat(env) {
+        return NewMethod(declaredName, nil, unknownType)
+    }
 }
 
 
 // The named parts of a method. e.g. "foo(x)" in "method foo(x) bar(y) {}"
-class PartNode(nm, ids, generics) {
+class PartNode(nm, params, generics) {
     def name is public = "method part"
     def declaredName is public = nm
-    def parameters is public = ids // List of parameter identifiers (name : type).
+    def parameters is public = params // List of parameter identifiers. e.g. (name : type).
     def genericParams is public = generics
 }
 
@@ -578,7 +594,7 @@ class IdentifierNode(nm, decType) {
 
 
 // Stores global and local variables. Mapping of variable names to values. Builds upon other environemtns to determine what object is currently Self. 
-// The top-most parent of any Environment is BaseEnvironment and is recusively reached when searching for variables/methods.
+// The top-most parent of any Environment is BaseEnvironment and is recusively reached when searching for variables/methods to terminate if not found.
 class Environment(par) {
     inherit BaseEnvironment
     def parent is public = par
