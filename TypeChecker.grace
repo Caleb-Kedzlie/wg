@@ -48,7 +48,7 @@ method c0N(h, t) { // Like a linked list, head appends to the front of the tail 
 // Empty AST. Formerly used a class, but an empty list is sufficient.
 method nil { return collections.list [] }
 // Check if an object is nil (empty list).
-method isNil(val) { 
+method isNil(val) {
     // If not list avoid running 'size' method.
     if (val.name != "list") then { return false }
     return val.size == 0
@@ -58,21 +58,25 @@ method isNil(val) {
 method n0M(v) { LiteralNode("number value", v, numberType) }
 method s0L(v) { LiteralNode("string value", v, stringType) }
 
-// Interpolated string for formatting. e.g. "price is {y} dollars." -> prefix="price is ", expr=y, and suffix=" dollars."
+// Interpolated string for formatting. e.g. "price is {y} dollars." -> prefix="price is ", expr={y}, and suffix=" dollars."
 method i0S(prefix, expr, suffix) { InterpolatedStringNode(prefix, expr, suffix) }
 
-// SafeStr for formatting special characters with prefix/suffix. Intuition: prefix.++(expr).++(suffix)
+// SafeStr for formatting special characters with prefix/suffix.
 method s4F(prefix, expr, suffix) {
-    // Check if it is a special character, if so then we can use stringType directly.
-    if (!specialChars.contains { c -> c == expr }) then { 
+    // Check if it is a special character.
+    if (!specialChars.contains { char -> char == expr }) then { 
         TypeError.raise "'{expr}' is not a special character expression in the safe String" 
     }
+
+    // Prefix is normal string, expr is special character as string, suffix is string (or s4F returning string).
+    return prefix ++ expr ++ suffix 
+
     // Check that prefix ++ stringType ++ suffix are all valid types for those methods.
-    return DotRequestNode(
-        DotRequestNode(prefix, "++(1)", o1N(stringType), nil),
-        "++(1)", 
-        o1N(suffix), 
-        nil)
+    //return DotRequestNode(
+    //    DotRequestNode(prefix, "++(1)", o1N(stringType), nil),
+    //    "++(1)", 
+    //    o1N(suffix), 
+    //    nil)
 }
 
 // Block/lambda containing parameters and body to be executed with the apply method.
@@ -121,7 +125,7 @@ method c0M(text) { CommentNode(text) }
 // Dialect Statement that extends the Grace language using source string. e.g. dialect "name"
 //method d0S(source) { DialectNode(source) }
 
-// Lineup infers/executes each element between semicolons: 1+1; f(a); print 3
+// Lineup infers/executes each element between square brackets: [1, 2, 3]
 //method l0N(elems) { LineupNode(elems) }
 
 
@@ -157,8 +161,10 @@ class NewMethod(nm, params, rType) {
 
     // Reuses argument subtype check but throws error instead of returning false.
     method checkArguments(args) {
+        def paramNames = "({parameters.map { p -> p.name}.join(", ")})"
+        def argNames = "({ args.map { a -> a.name}.join(", ") })"
         if (!argumentsSubtype(args)) then {
-            TypeError.raise "Method {name} ({parameters} -> {returnType}) arguments must be '{parameters.map { a -> a.name} }' not '{args.map { a -> a.name} }'"
+            TypeError.raise "'method {name} ({paramNames} -> {returnType.name})' arguments must be {paramNames} not {argNames}"
         }
     }
 }
@@ -184,7 +190,7 @@ class AnyType(nm) {
         methods.add(NewMethod("==(1)", o1N(unknownType), booleanType))
         methods.add(NewMethod("!=(1)", o1N(unknownType), booleanType))
         methods.add(NewMethod("asString(0)", nil, stringType))
-        print "SETUP {name}: {methods.join(", ")}"
+        // print "SETUP {asString}"
     }
 
     method addMethod(meth) {
@@ -192,21 +198,21 @@ class AnyType(nm) {
     }
 
     // I want it to throw an error if a method doesn't exist usually. Only used for subtype checking.
-    method hasMethod(name) {
-        methods.contains { m -> m.name == name } 
+    method hasMethod(methName) {
+        methods.contains { meth -> meth.name == methName } 
     }
 
-    method getMethod(nm) {
-        methods.do { m -> 
-            if (m.name == nm) then { return m } 
+    method getMethod(methName) {
+        methods.do { meth -> 
+            if (meth.name == methName) then { return meth } 
         }
-        TypeError.raise "Method {nm} does not exist for {name}"
+        TypeError.raise "Method {methName} does not exist for {name}"
     }
 
+    // Format name with methods.
     method asString {
-        return name
+        return "{name} ({methods.join(", ")})"
     }
-    
 
     // Compare another type with this type to check if matching/subtype.
     method acceptsSubtype(subtype) {
@@ -215,19 +221,19 @@ class AnyType(nm) {
             return true
         }
 
-        methods.do { m ->
+        methods.do { meth ->
             // The subtype should at least have all methods of this type.
-            if (!subtype.hasMethod(m.name)) then {
+            if (!subtype.hasMethod(meth.name)) then {
                 return false
             }
-            def subtypeMeth = subtype.getMethod(m.name)
+            def subtypeMeth = subtype.getMethod(meth.name)
             // Compare the method params with the subtype.
-            if (!m.argumentsSubtype(subtypeMeth.parameters)) then {
-                // print "{m.name} invalid arguments ({subtypeMeth.parameters.join(", ")})"
+            if (!meth.argumentsSubtype(subtypeMeth.parameters)) then {
+                // print "{meth.name} invalid arguments ({subtypeMeth.parameters.join(", ")})"
                 return false
             }
-            if (!m.returnType.acceptsSubtype(subtypeMeth.returnType)) then {
-                // print "Invalid returnType {m.name}!"
+            if (!meth.returnType.acceptsSubtype(subtypeMeth.returnType)) then {
+                // print "Invalid returnType {meth.name}!"
                 return false
             }
         }
@@ -275,7 +281,7 @@ class LiteralNode(nm, v, lit) {
     method checkType(env, expected) { // Expected and Actual are AnyType literals.
         def actual = self.inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "'{actual.name} ({actual.methods.join(", ")})' is not a subtype of expected '{expected.name} ({expected.methods.join(", ")})'" 
+            TypeError.raise "'{actual.asString}' is not a subtype of expected '{expected.asString}'" 
         }
     }
 }
@@ -286,7 +292,7 @@ class DefNode(nm, decType, annotations, val) {
     def name is public = "def declaration"
     def declaredName is public = nm
     def declaredType is public = if (decType.size > 0) then { decType.first } else { unknownType }
-    def value is public = if (isNil(val)) then { unknownType } elseif {val.name == "list"} then { val.first } else { val }
+    def value is public = if (isNil(val)) then { unknownType } else { val }
 
     method inferType(env) {
         // Def needs initial value, so if it is nil (uses unknownType), raise TypeError.
@@ -364,11 +370,11 @@ class LexicalRequestNode(meth, args, generics) {
 
     // Checks the method exists in the environment and returns the return type of it.
     method inferType(env) {
-        def meth = env.findMethod(methodName)
+        def targetMethod = env.findMethod(methodName)
         // Check that the method takes the inferred arguments.
         def argumentTypes = arguments.map { a -> a.inferType(env) }
-        meth.checkArguments(argumentTypes) // Check arguments are subtype or throw error.
-        return meth.returnType
+        targetMethod.checkArguments(argumentTypes) // Check arguments are subtype or throw error.
+        return targetMethod.returnType
     }
 
     // Checking the lexical request searched object type (calculated in inferType).
@@ -445,9 +451,9 @@ class ObjectNode(bdy, anns) {
         // The self method of this object.
         deeperEnv.addMethod(NewMethod("self(0)", nil, deeperEnv.asType))
 
-        body.do { m ->
-            def methType = m.inferType(deeperEnv)
-            m.checkType(deeperEnv, methType)
+        body.do { meth ->
+            def methType = meth.inferType(deeperEnv)
+            meth.checkType(deeperEnv, methType)
             // print "Object body Type: {bodyType.asString}"
         }
 
@@ -507,9 +513,13 @@ class InterpolatedStringNode(pre, expr, suff) {
     }
 
     method checkType(env, expected) {
+        // To check expr method exists in environment.
+        expr.checkType(env, unknownType)
+
+        // This node should always be a stringType.
         def actual = self.inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "'{actual.name} ({actual.methods.join(", ")})' is not a subtype of '{expected.name} ({expected.methods.join(", ")})' for interpolated string" 
+            TypeError.raise "'{actual.asString}' is not a subtype of '{expected.asString}' for interpolated string" 
         }
     }
 }
@@ -537,7 +547,7 @@ class MethodNode(parts, rType, anns, bdy) {
         def returnType = env.findType(lexicalReturnType)
         // Construct deeper environment which returns this rType.
         def deeperEnv = Environment(env)
-        deeperEnv.methodReturn(returnType, declaredName)
+        deeperEnv.methodReturn(declaredName, returnType)
 
         // Add the parameter getters to this environment
         parameters.do { param ->
@@ -597,12 +607,12 @@ class IdentifierNode(nm, decType) {
 // The top-most parent of any Environment is BaseEnvironment and is recusively reached when searching for variables/methods to terminate if not found.
 class Environment(par) {
     inherit BaseEnvironment
-    def parent is public = par
-    var methods is public := nil // Storing methods and variable getters.
-    var types is public := nil // For type declaration nodes.
+    def parent = par
+    var methods := nil // Storing methods and variable getters.
+    var types := nil // For type declaration nodes.
     // These two are used if this environment itself is a method.
     var returnType := nil
-    var methodScope is public := ""
+    var declaredName := nil
 
     // Add a method to the environment at the start of the list to mask outer methods with the same name.
     method addMethod(meth) is override {
@@ -621,20 +631,29 @@ class Environment(par) {
         return parent.findMethod(name)
     }
 
-    // Setup method return type which is recursively looked up. Called inside MethodNode (m0D).
-    method methodReturn(rType, scp) {
+    // Setup method return type which is recursively looked up and method name. Called inside MethodNode (m0D).
+    method methodReturn(methName, rType) {
+        declaredName := methName
         returnType := rType
-        methodScope := scp
     }
 
     // If this environment is within a method then it recursively finds the return type.
-    method returnType is override {
+    method getReturnType is override {
         // Return type is set if not nil (can be unknownType).
         if (!isNil(returnType)) then {
             return returnType
         }
-        return parent.returnType
+        return parent.getReturnType
     }
+
+    method getDeclaredName is override {
+        // Like return type it gets the method declared name.
+        if (!isNil(declaredName)) then {
+            return declaredName
+        }
+        return parent.getDeclaredName
+    }
+
 
     method findType(expr) is override {
         // TODO
@@ -681,8 +700,12 @@ class BaseEnvironment {
         TypeError.raise "No method called '{name}' in scope"
     }
 
-    method returnType {
+    method getReturnType {
         TypeError.raise "Invalid return statement as there is no enclosing method"
+    }
+
+    method getDeclaredName {
+        TypeError.raise "Invalid declared name as there is no enclosing method"
     }
 
     // Find a literal type object via the name.
@@ -715,8 +738,7 @@ class BaseEnvironment {
 print("\n-----Tests-----")
 var testNum := 1 // Increments after each test.
 
-// Could compare test e.message but it is not robust.
-// Even better I could use an error code that is different for each location. i.e. T21 then scan first 3 character of error message.
+// TODO I could use an error code that is different for each location. i.e. T21 then scan first 3 character of error message to ensure correct error for assertFails.
 
 // Try-catch to run AST then throw a FailedError if it did not throw the expected TypeError exception.
 method assertFails(ast) {
