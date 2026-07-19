@@ -475,7 +475,7 @@ class CommentNode(txt) {
     def name is public = "comment"
     def text is public = txt
 
-    method inferType(env) { return unknownType } // TODO May be unnecessary if all body lists remove comments.
+    method inferType(env) { return unknownType } // May be unnecessary if all block body lists remove comments.
     method checkType(env, expected) {} // Comments always valid if parsed, so never throws error.
 }
 
@@ -490,8 +490,9 @@ class ReturnNode(val) {
         return value.inferType(env) 
     }
 
-    // Check the type of the value against an expected type. TODO Send env.returnType as expected.
-    method checkType(env, expected) {
+    // Check the type of the value against an expected type.
+    method checkType(env, _) {
+        def expected = env.getReturnType // Recursive lookup.
         def valueType = inferType(env)
         if (!expected.acceptsSubtype(valueType)) then {
             TypeError.raise "Return statement value type: '{valueType.name}' not a subtype of expected type '{expected.name}'"
@@ -558,20 +559,31 @@ class MethodNode(parts, rType, anns, bdy) {
         // Add the body declarations to this environment
         addDeclarations(deeperEnv, body)
 
-        // Check the last body expression (no need for explicit return) against the return type.
-        var finalExpr := nil
-        body.do { expr ->
-            expr.checkType(deeperEnv, unknownType) // Send checks down the children.
-            // Track last expression so far.
-            finalExpr := expr.inferType(deeperEnv)
-            if (expr.name == "return statement") then {} // TODO throw error if return that is not final expression.
-        }
-
         // Check expected is doneType.
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
             TypeError.raise "Method expected result '{expected.name}', actually got '{actual.name}'"
         }
+
+        // Propagate typechecks down the expression children. Also handles nested return statements.
+        body.do { expr -> expr.checkType(deeperEnv, unknownType) }
+
+        // Copy the body to exclude the final expression for ensuring no early return statements.
+        def bodyCopy = collections.list(body)
+        def finalExpr = if (body.size == 0) then { unknownType } else { bodyCopy.removeAt(bodyCopy.size) }
+        bodyCopy.do { expr ->
+            // Throw error if 'return' statement before final expression without being inside a block. TODO could extend to flag unreachable for unconditional blocks with returns.
+            if (expr.name == "return statement") then { 
+                TypeError.raise "Unreachable code in method body after return" 
+            }
+        }
+        // Check the last body expression (regardless of explicit return) against the environment return type.
+        def finalType = finalExpr.inferType(deeperEnv)
+        if (!returnType.acceptsSubtype(finalType)) then {
+            TypeError.raise "Method expected return type '{returnType}', actually got '{finalType}' as final expression"
+        }
+
+        
     }
 
     // Add this method expression to the current environment.
@@ -662,7 +674,7 @@ class Environment(par) {
             //def name = methodName.substringFrom(1)to(methodName.size - 3)
             
             // Search through custom declared types.
-            // TODO Need an addType() method that creates name, value pairs. Or better: use a dictionary instead of objects with two fields.
+            // TODO Need an 'addType' method that creates name, value pairs. Or better: use a dictionary instead of objects with two fields.
             //types.do { t ->
             //    if (t.name == name) then {
             //        return t.value
@@ -721,7 +733,7 @@ class BaseEnvironment {
         if (baseTypes.containsKey(name)) then {
             return baseTypes.at(name)
         }
-        // Boolean literals are lexically resolved (true -> "boolean value"). TODO ensure this is no longer necessary because of findMethod().
+        // Boolean literals are lexically resolved (true -> "boolean value"). TODO ensure this is no longer necessary because of 'findMethod'.
         //if (name == "boolean value") then {
         //    print("Boolean value")
         //    return booleanType
