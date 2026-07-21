@@ -1,9 +1,4 @@
-// TODO delete info.
-// COMPILE ONLY ONCE: javac -cp java/ java/nz/mwh/wg/Start.java
-// java -cp java/ nz.mwh.wg.Start TypeChecker.grace
-// Bidirectional because "inferType" deduces type bottom-up and "checkType" tests if an expression matches type top-down or throws error.
-
-// Importing library collections.grace to use array lists instead of linked lists.
+// Importing library collections.grace to use array lists and dictionaries instead of linked lists.
 import "collections" as collections
 
 // Defined custom exceptions. Usage: TypeError.raise "message"
@@ -69,18 +64,11 @@ method s4F(prefix, expr, suffix) {
     }
 
     // Prefix is normal string, expr is special character as string, suffix is string (or s4F returning string).
-    return prefix ++ expr ++ suffix 
-
-    // Check that prefix ++ stringType ++ suffix are all valid types for those methods.
-    //return DotRequestNode(
-    //    DotRequestNode(prefix, "++(1)", o1N(stringType), nil),
-    //    "++(1)", 
-    //    o1N(suffix), 
-    //    nil)
+    return prefix ++ expr ++ suffix
 }
 
 // Block/lambda containing parameters and body to be executed with the apply method.
-//method b1K(params, body) { BlockNode(params, body) }
+method b1K(params, body) { BlockNode(params, body) }
 
 // Declarations for def and var.
 method d3F(name, dType, anns, value) { DefNode(name, dType, anns, value) }
@@ -131,6 +119,7 @@ method c0M(text) { CommentNode(text) }
 
 //
 // #### IMPLEMENTATION ####
+// Bidirectional because "inferType" deduces type bottom-up and "checkType" tests if an expression matches type top-down or throws error.
 //
 
 
@@ -179,7 +168,7 @@ method arglessMeth(name, rType) {
 }
 
 
-// Node for all types to be built upon.
+// Node for all literal types to be built upon.
 class AnyType(nm) {
     var name is public := nm
     var methods := nil
@@ -253,7 +242,7 @@ def unknownType = object {
     method hasMethod(name) { return false }
     method getMethod(nm) { TypeError.raise "Unknown type has no methods" }
     method inferType(env) { return self }
-    method checkType(env, expected) {}
+    method checkType(env, _) {}
 }
 
 
@@ -475,8 +464,9 @@ class CommentNode(txt) {
     def name is public = "comment"
     def text is public = txt
 
-    method inferType(env) { return unknownType } // May be unnecessary if all block body lists remove comments.
-    method checkType(env, expected) {} // Comments always valid if parsed, so never throws error.
+    // Since all method/block body lists remove comments to not interfere with return types, throw error if not removed.
+    method inferType(env) { TypeError.raise "Cannot infer comment type" }
+    method checkType(env, _) { inferType(env) }
 }
 
 
@@ -591,7 +581,7 @@ class MethodNode(parts, rType, anns, bdy) {
         env.addMethod(methodFormat(env)) 
     }
 
-    // TODO implement a method to convert this Node to the NewMethod(nm, params, rType) format. Reused in InterfaceNode.
+    // TODOTODO implement a method to convert this Node to the NewMethod(nm, params, rType) format. Reused in InterfaceNode.
     method methodFormat(env) {
         return NewMethod(declaredName, nil, unknownType)
     }
@@ -612,6 +602,22 @@ class IdentifierNode(nm, decType) {
     def name is public = "parameter identifier"
     def declaredName is public = nm
     def declaredType is public = if (isNil(decType)) then { unknownType } else { decType.first } // unknownType or lexical request.
+}
+
+
+// Block for if statement, loop, lambda etc. Expressions within two braces "{}".
+class BlockNode(params, bdy) {
+    def parameters = params
+    def name is public = "block"
+    def body = body
+
+    method inferType(env) {
+
+    }
+
+    method checkType(env, expected) {
+
+    }
 }
 
 
