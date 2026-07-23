@@ -75,7 +75,7 @@ method d3F(name, dType, anns, value) { DefNode(name, dType, anns, value) }
 method v4R(name, dType, anns, value) { VarNode(name, dType, anns, value) }
 
 // Reassignment of a variable (defined by var). Uses lexical or dot request. No class needed.
-//method a5N(lhs, rhs) {}
+method a5N(lhs, rhs) { unknownType } // TODO
 
 // Type and interface declaration.
 //method t0D(name, genericParams, value) {}
@@ -519,12 +519,12 @@ class InterpolatedStringNode(pre, expr, suff) {
 // Actual method declaration in the parsed script (as AST).
 class MethodNode(parts, rType, anns, bdy) {
     def name is public = "method declaration"
-    // Merge all the method parts. e.g. "foo(1)bar(2)" from "method foo(a) bar(b, c)"
+    // Merge all the method parts. e.g. "method foo(a) bar(b, c)" turns into "foo(1)bar(2)"
     def declaredName is public = parts.map { part -> "{part.declaredName}({part.parameters.size})" }.join("")
     def parameters is public = parts.flatMap { part -> part.parameters } // Merges into single list.
 
     // Store return type, unknownType if nil.
-    def lexicalReturnType is public = if (isNil(rType)) then { unknownType } else { rType } 
+    def lexicalReturnType is public = if (isNil(rType)) then { unknownType } else { rType.first } 
     def annotations is public = anns
     def body is public = bdy.without { x -> x.name == "comment" } // Remove comments from body.
 
@@ -572,18 +572,17 @@ class MethodNode(parts, rType, anns, bdy) {
         if (!returnType.acceptsSubtype(finalType)) then {
             TypeError.raise "Method expected return type '{returnType}', actually got '{finalType}' as final expression"
         }
-
-        
     }
 
-    // Add this method expression to the current environment.
+    // Add this method expression to the current environment formatted as a NewMethod object.
     method addToEnvironment(env) {
-        env.addMethod(methodFormat(env)) 
-    }
-
-    // TODOTODO implement a method to convert this Node to the NewMethod(nm, params, rType) format. Reused in InterfaceNode.
-    method methodFormat(env) {
-        return NewMethod(declaredName, nil, unknownType)
+        // Lexically finds the return type literal.
+        def returnType = env.findType(lexicalReturnType)
+        // CheckType already enforces all params are IdentifierNodes. Lexically finds the param types.
+        def paramTypes = parameters.map { param -> env.findType(param.declaredType) }
+        // Add NewMethod object to environment.
+        def methodFormat = NewMethod(declaredName, paramTypes, returnType)
+        env.addMethod(methodFormat) 
     }
 }
 
@@ -609,14 +608,14 @@ class IdentifierNode(nm, decType) {
 class BlockNode(params, bdy) {
     def parameters = params
     def name is public = "block"
-    def body = body
+    def body = bdy
 
     method inferType(env) {
-
+        unknownType // TODO
     }
 
     method checkType(env, expected) {
-
+        // TODO
     }
 }
 
@@ -731,7 +730,7 @@ class BaseEnvironment {
         var name := expr.name
         // Handle lexical requests.
         if (name == "lexical request") then {
-            // Extract method name without argument count label e.g. "String" not "String(0)"
+            // Extract method name without parameter counts e.g. "String" not "String(0)"
             def methName = expr.methodName
             name := methName.substringFrom(1)to(methName.size - 3)
         }
@@ -892,12 +891,12 @@ assertPasses(o0C(c2N(v4R("x",nil,nil,nil),v4R("y",o1N(l0R("String(0)",nil,nil)),
 // TEST 24
 // var x := 3
 // x := 4
-//assertPasses(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),n0M(4))),nil))
+assertPasses(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),n0M(4))),nil))
 
 // TEST 25
 // var x := 3
 // x := true
-//assertFails(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),l0R("true(0)",nil,nil))),nil))
+assertFails(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),l0R("true(0)",nil,nil))),nil))
 
 // TEST 26
 // def x : Boolean = true
@@ -905,38 +904,38 @@ assertPasses(o0C(o1N(d3F("x",o1N(l0R("Boolean(0)",nil,nil)),nil,l0R("true(0)",ni
 
 // TEST 27
 // if (3 == 3) then { print("equal") }
-//assertPasses(o0C(o1N(l0R("if(1)then(1)",c2N(d0R(n0M(3),"==(1)",o1N(n0M(3)),nil),b1K(nil,o1N(l0R("print(1)",o1N(s0L("equal")),nil)))),nil)),nil))
+assertPasses(o0C(o1N(l0R("if(1)then(1)",c2N(d0R(n0M(3),"==(1)",o1N(n0M(3)),nil),b1K(nil,o1N(l0R("print(1)",o1N(s0L("equal")),nil)))),nil)),nil))
 
 // TEST 28
 // if ("hi") then {}
-//assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(s0L("hi"),b1K(nil,nil)),nil)),nil))
+assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(s0L("hi"),b1K(nil,nil)),nil)),nil))
 
 // TEST 29
 // if (7) then {}
-//assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(n0M(7),b1K(nil,nil)),nil)),nil))
+assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(n0M(7),b1K(nil,nil)),nil)),nil))
 
 // TEST 30
 // if (true) then {}
-//assertPasses(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(nil,nil)),nil)),nil))
+assertPasses(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(nil,nil)),nil)),nil))
 
 // TEST 31
 // if (true) then {}
-//assertPasses(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(nil,nil)),nil)),nil))
+assertPasses(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(nil,nil)),nil)),nil))
 
 // If statements don't take an input in their block.
 // TEST 32
 // if (true) then { b -> 1 }
-// assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(o1N(i0D("b",nil)),o1N(n0M(1)))),nil)),nil))
+assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(o1N(i0D("b",nil)),o1N(n0M(1)))),nil)),nil))
 
 // TEST 32
 // if (true) then { b : Number -> 1 }
-//assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(o1N(i0D("b",o1N(l0R("Number(0)",nil,nil)))),o1N(n0M(1)))),nil)),nil))
+assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(o1N(i0D("b",o1N(l0R("Number(0)",nil,nil)))),o1N(n0M(1)))),nil)),nil))
 
 // TODO make many more method tests for all edge cases.
 
 // TEST 33
 // method test {}
-// assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,nil)),nil))
+assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,nil)),nil))
 
 // Test 34
 // method test(x : String, y: Number) when(z : Boolean) {}
@@ -987,7 +986,7 @@ assertPasses(o0C(o1N(d0R(s0L(s4F("", c9B, s4F("", c9D, s4F("",c9Q,s4F("",c9N,s4F
 // TODO I think this should fail because Test refers to both. Many other edge cases like this with variables or parameters or new types with the same name.
 // def Test = object {}
 // class Test {}
-//assertFails(o0C(c2N(d3F("Test",nil,nil,o0C(nil,nil)),m0D(o1N(p0T("Test",nil,nil)),nil,nil,o1N(o0C(nil,nil)))),nil))
+// assertFails(o0C(c2N(d3F("Test",nil,nil,o0C(nil,nil)),m0D(o1N(p0T("Test",nil,nil)),nil,nil,o1N(o0C(nil,nil)))),nil))
 
 
 // Complex test in file: sample.grace
