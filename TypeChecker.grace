@@ -5,6 +5,8 @@ import "collections" as collections
 def TypeError = Exception.refine "TypeError"
 def FailedError = Exception.refine "FailedError"
 
+def MethodError = TypeError.refine "MethodError"
+
 
 //
 // #### AST METHODS ####
@@ -75,14 +77,23 @@ method d3F(name, dType, anns, value) { DefNode(name, dType, anns, value) }
 method v4R(name, dType, anns, value) { VarNode(name, dType, anns, value) }
 
 // Reassignment of a variable (defined by var). Uses lexical or dot request. No class needed.
-method a5N(lhs, rhs) { unknownType } // TODO
+method a5N(lhs, rhs) { 
+    //TODO
+    unknownType 
+} 
 
 // Type and interface declaration.
-//method t0D(name, genericParams, value) {}
-//method i0C(body) {}
+method t0D(name, genericParams, value) {
+    //TODO
+    unknownType
+} 
+method i0C(body) {
+    //TODO
+    unknownType
+}
 
 // Method signature (in interfaces).
-//method m0S(parts, rType) { MethodSignatureNode(parts, rType) }
+method m0S(parts, rType) { MethodSignatureNode(parts, rType) }
 // Method declaration (includes annotations and body).
 method m0D(parts, rType, anns, body) { MethodNode(parts, rType, anns, body) }
 
@@ -107,14 +118,16 @@ method r3T(value) { ReturnNode(value) }
 // Comment. Gets excluded from the body of objects, methods and blocks.
 method c0M(text) { CommentNode(text) }
 
+// Lineup infers each element between square brackets: [1, 2, 3]
+method l0N(elems) { LineupNode(elems) }
+
 // Import statement using source string. e.g. import "ast" as ast
-//method i0M(source, binding) { ImportNode(source) }
+method i0M(source, binding) { ImportNode(source) }
 
 // Dialect Statement that extends the Grace language using source string. e.g. dialect "name"
-//method d0S(source) { DialectNode(source) }
+method d0S(source) { DialectNode(source) }
 
-// Lineup infers/executes each element between square brackets: [1, 2, 3]
-//method l0N(elems) { LineupNode(elems) }
+
 
 
 //
@@ -159,7 +172,7 @@ class NewMethod(nm, params, rType) {
 }
 
 // Helper to make method with one argument with same type as the return type.
-method oneArgMeth(name, rType) {
+method sameArgMeth(name, rType) {
     return NewMethod(name, o1N(rType), rType)
 }
 // Helper to make method with no arguments and specific return type.
@@ -179,7 +192,6 @@ class AnyType(nm) {
         methods.add(NewMethod("==(1)", o1N(unknownType), booleanType))
         methods.add(NewMethod("!=(1)", o1N(unknownType), booleanType))
         methods.add(NewMethod("asString(0)", nil, stringType))
-        // print "SETUP {asString}"
     }
 
     method addMethod(meth) {
@@ -239,7 +251,7 @@ def unknownType = object {
     method acceptsSubtype(subtype) { return true }
     method asString { return name }
     method addMethod(meth) { TypeError.raise "Unknown type cannot add methods"}
-    method hasMethod(name) { return false }
+    method hasMethod(nm) { return false }
     method getMethod(nm) { TypeError.raise "Unknown type has no methods" }
     method inferType(env) { return self }
     method checkType(env, _) {}
@@ -252,8 +264,8 @@ def stringType = AnyType("String")
 def booleanType = AnyType("Boolean")
 // Similar to void: def/var use this type when done.
 def doneType = AnyType("Done")
-numberType.setupMethods(c0N(oneArgMeth("+(1)", numberType), o1N(oneArgMeth("*(1)", numberType))))
-stringType.setupMethods(c0N(oneArgMeth("++(1)", stringType), o1N(arglessMeth("size(0)", numberType))))
+numberType.setupMethods(c0N(sameArgMeth("+(1)", numberType), c2N(sameArgMeth("*(1)", numberType), sameArgMeth("..(1)", numberType))))
+stringType.setupMethods(c2N(sameArgMeth("++(1)", stringType), arglessMeth("size(0)", numberType)))
 booleanType.setupMethods(o1N(arglessMeth("prefix!(0)", booleanType)))
 
 
@@ -261,7 +273,7 @@ booleanType.setupMethods(o1N(arglessMeth("prefix!(0)", booleanType)))
 class LiteralNode(nm, v, lit) {
     def name is public = nm
     def value is public = v
-    def literal = lit
+    def literal is public = lit
     
     method inferType(env) {
         return literal
@@ -587,6 +599,11 @@ class MethodNode(parts, rType, anns, bdy) {
 }
 
 
+class MethodSignatureNode(parts, rType) {
+    //TODO
+}
+
+
 // The named parts of a method. e.g. "foo(x)" in "method foo(x) bar(y) {}"
 class PartNode(nm, params, generics) {
     def name is public = "method part"
@@ -606,9 +623,51 @@ class IdentifierNode(nm, decType) {
 
 // Block for if statement, loop, lambda etc. Expressions within two braces "{}".
 class BlockNode(params, bdy) {
-    def parameters = params
     def name is public = "block"
+    def parameters = params
     def body = bdy
+
+    method inferType(env) {
+        return unknownType // TODO
+    }
+
+    method checkType(env, expected) {
+        // TODO
+    }
+}
+
+
+class LineupNode(elems) {
+    def name is public = "lineup"
+    def elements is public = elems
+
+    method inferType(env) {
+        unknownType // TODO
+    }
+
+    method checkType(env, expected) {
+        // TODO
+    }
+}
+
+
+class ImportNode(src) {
+    def name is public = "import statement"
+    def source is public = src
+
+    method inferType(env) {
+        unknownType // TODO
+    }
+
+    method checkType(env, expected) {
+        // TODO
+    }
+}
+
+
+class DialectNode(src) {
+    def name is public = "dialect statement"
+    def source is public = src
 
     method inferType(env) {
         unknownType // TODO
@@ -755,28 +814,37 @@ class BaseEnvironment {
 print("\n-----Tests-----")
 var testNum := 1 // Increments after each test.
 
-// TODO I could use an error code that is different for each location. i.e. T21 then scan first 3 character of error message to ensure correct error for assertFails.
-
-// Try-catch to run AST then throw a FailedError if it did not throw the expected TypeError exception.
+// Default error is TypeError, but specific errors can be checked to ensure the correct node threw the error.
 method assertFails(ast) {
+    assertFails(ast, TypeError)
+}
+
+// Try-catch to run AST then throw a FailedError if it did not throw the expected TypeError (or derivative) exception.
+method assertFails(ast, error) {
     try {
         ast.checkType(Environment(BaseEnvironment), unknownType)
         FailedError.raise "No TypeError"
-    } catch { e : TypeError ->
-        print "PASSED: Test{testNum} successfully threw -> {e}"
+    } catch { e : error ->
+        print "(F) PASSED: Test{testNum} successfully threw -> '{e}'"
     } catch { e : FailedError ->
-        print "-FAILED-: Test{testNum} did not throw a TypeError"
+        print "(F) -FAILED-: Test{testNum} did not throw any error"
+    } catch { e -> 
+        // Caused by coding mistakes or wrong specific error.
+        print "(F) -FAILED-: Test{testNum} threw the wrong error '{e}' instead of '{error}'"
     }
     testNum := testNum + 1
 }
 
-// Opposite to succeed only if no TypeError thrown.
+// Tests that succeed only if no TypeError thrown. Specific error types not needed as none should occur.
 method assertPasses(ast) {
     try {
         ast.checkType(Environment(BaseEnvironment), unknownType)
-        print "PASSED: Test{testNum} did not throw a TypeError"
+        print "(P) PASSED: Test{testNum} did not throw 'TypeError'"
     } catch { e : TypeError ->
-        print "-FAILED-: Test{testNum} unexpectedly threw -> {e}"
+        print "(P) -FAILED-: Test{testNum} unexpectedly threw -> '{e}'"
+    } catch { e -> 
+        // Unexpected error caused by coding mistakes.
+        print "(P) -FAILED CRITICAL-: Test{testNum} unexpectedly threw -> '{e}'"
     }
     testNum := testNum + 1
 }

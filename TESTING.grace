@@ -167,7 +167,7 @@ try {
 //    bar -> String
 //}
 
-// There is A | B not not A & B that has to be done manually like this:
+// There is A | B not A & B that has to be done manually like this:
 //type AandB = interface {
 //    foo -> Number
 //    bar -> String
