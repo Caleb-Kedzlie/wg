@@ -6,6 +6,7 @@ def TypeError = Exception.refine "TypeError"
 def FailedError = Exception.refine "FailedError"
 
 def MethodError = TypeError.refine "MethodError"
+// TODO error type for all if not most nodes and then make tests check for more specific errors to ensure correct cause.
 
 
 //
@@ -122,7 +123,7 @@ method c0M(text) { CommentNode(text) }
 method l0N(elems) { LineupNode(elems) }
 
 // Import statement using source string. e.g. import "ast" as ast
-method i0M(source, binding) { ImportNode(source) }
+method i0M(source, binding) { ImportNode(source, binding) }
 
 // Dialect Statement that extends the Grace language using source string. e.g. dialect "name"
 method d0S(source) { DialectNode(source) }
@@ -248,13 +249,13 @@ class AnyType(nm) {
 def unknownType = object {
     def name is public = "Unknown"
 
-    method acceptsSubtype(subtype) { return true }
+    method acceptsSubtype(_) { return true }
     method asString { return name }
-    method addMethod(meth) { TypeError.raise "Unknown type cannot add methods"}
-    method hasMethod(nm) { return false }
-    method getMethod(nm) { TypeError.raise "Unknown type has no methods" }
-    method inferType(env) { return self }
-    method checkType(env, _) {}
+    method addMethod(_) { TypeError.raise "Unknown type cannot add methods"}
+    method hasMethod(_) { return false }
+    method getMethod(_) { TypeError.raise "Unknown type has no methods" }
+    method inferType(_) { return self }
+    method checkType(_, _) {}
 }
 
 
@@ -267,6 +268,8 @@ def doneType = AnyType("Done")
 numberType.setupMethods(c0N(sameArgMeth("+(1)", numberType), c2N(sameArgMeth("*(1)", numberType), sameArgMeth("..(1)", numberType))))
 stringType.setupMethods(c2N(sameArgMeth("++(1)", stringType), arglessMeth("size(0)", numberType)))
 booleanType.setupMethods(o1N(arglessMeth("prefix!(0)", booleanType)))
+// Special case for imported types as it has unknown methods.
+def importType = AnyType("Import")
 
 
 // Node that stores a name and literal value and can compare types via structual subtyping.
@@ -282,7 +285,7 @@ class LiteralNode(nm, v, lit) {
     method checkType(env, expected) { // Expected and Actual are AnyType literals.
         def actual = self.inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "'{actual.asString}' is not a subtype of expected '{expected.asString}'" 
+            TypeError.raise "Actual '{actual}' is not a subtype of expected '{expected}' for {name}" 
         }
     }
 }
@@ -304,7 +307,7 @@ class DefNode(nm, decType, annotations, val) {
         def expectedType = env.findType(declaredType)
         def valueType = value.inferType(env)
         if (!expectedType.acceptsSubtype(valueType)) then {
-            TypeError.raise "Actual '{valueType.name}' is not a subtype of '{expectedType.name}'"
+            TypeError.raise "Actual '{valueType.name}' is not a subtype of '{expectedType.name}' for {name}"
         }
         return doneType
     }
@@ -409,7 +412,7 @@ class DotRequestNode(rec, meth, args, generics) {
 
         // Directly check the receiver type has this method.
         if (!receiverType.hasMethod(methodName)) then {
-            TypeError.raise "No method called '{methodName}' on {receiverType.asString}"
+            TypeError.raise "No method called '{methodName}' on {receiverType}"
         }
         // Check the argument types match the method parameter types.
         def targetMethod = receiverType.getMethod(methodName)
@@ -434,10 +437,11 @@ class DotRequestNode(rec, meth, args, generics) {
 // Helper to add declarations for objects, methods and blocks.
 method addDeclarations(env, body) {
     body.do { n ->
-        if (((n.name == "var declaration") || (n.name == "def declaration")) || 
-            ((n.name == "type declaration") || (n.name == "method declaration"))) then {
+        if ((n.name == "var declaration") || (n.name == "def declaration") ||
+            (n.name == "type declaration") || (n.name == "method declaration") ||
+            (n.name == "import statement")) then {
             n.addToEnvironment(env)
-        } 
+        }
     }
 }
 
@@ -453,9 +457,9 @@ class ObjectNode(bdy, anns) {
         deeperEnv.addMethod(NewMethod("self(0)", nil, deeperEnv.asType))
 
         body.do { meth ->
-            def methType = meth.inferType(deeperEnv)
+            def methType = meth.inferType(deeperEnv) // TODO Maybe this should be unknown type. Checktype always runs inferType so it is a comparison with itself.
             meth.checkType(deeperEnv, methType)
-            // print "Object body Type: {bodyType.asString}"
+            // print "Object body Type: {bodyType}"
         }
 
         return deeperEnv.asType
@@ -522,7 +526,7 @@ class InterpolatedStringNode(pre, expr, suff) {
         // This node should always be a stringType.
         def actual = self.inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "'{actual.asString}' is not a subtype of '{expected.asString}' for interpolated string" 
+            TypeError.raise "Actual '{actual}' is not a subtype of '{expected}' for {name}" 
         }
     }
 }
@@ -617,7 +621,7 @@ class PartNode(nm, params, generics) {
 class IdentifierNode(nm, decType) {
     def name is public = "parameter identifier"
     def declaredName is public = nm
-    def declaredType is public = if (isNil(decType)) then { unknownType } else { decType.first } // unknownType or lexical request.
+    def declaredType is public = if (isNil(decType)) then { unknownType } else { decType.first } // Either unknownType or lexical request.
 }
 
 
@@ -642,7 +646,7 @@ class LineupNode(elems) {
     def elements is public = elems
 
     method inferType(env) {
-        unknownType // TODO
+        return unknownType // TODO
     }
 
     method checkType(env, expected) {
@@ -651,16 +655,33 @@ class LineupNode(elems) {
 }
 
 
-class ImportNode(src) {
+class ImportNode(src, bind) {
     def name is public = "import statement"
     def source is public = src
+    def declaredName is public = bind.declaredName
+    def declaredType is public = bind.declaredType // TODO if this is an interface then at least those methods are imported.
 
     method inferType(env) {
-        unknownType // TODO
+        return doneType
     }
 
     method checkType(env, expected) {
-        // TODO
+        // Check doneType matching expected.
+        def actial = inferType(env)
+        if (!expected.acceptsSubtype(actual)) then {
+            TypeError.raise "Actual '{actual}' is not a subtype of '{expected}' for {name}" 
+        }
+
+        // TODO Is it possible to typecheck the declaredType.
+        //def decType = env.findType(declaredType)
+        //if (!expected.acceptsSubtype(decType)) then {
+        //    TypeError.raise "Declared '{decType.name}' is not a subtype of '{expected.name}'"
+        //}
+    }
+
+    method addToEnvironment(env) {
+        def meth = NewMethod(declaredName ++ "(0)", nil, importType) // TODO make dot requests on import type always succeed because the imported methods are unknown.
+        env.addMethod(meth)
     }
 }
 
@@ -670,11 +691,14 @@ class DialectNode(src) {
     def source is public = src
 
     method inferType(env) {
-        unknownType // TODO
+        return doneType
     }
 
     method checkType(env, expected) {
-        // TODO
+        def actial = inferType(env)
+        if (!expected.acceptsSubtype(actual)) then {
+            TypeError.raise "Actual '{actual}' is not a subtype of '{expected}' for {name}"
+        }
     }
 }
 
@@ -825,12 +849,12 @@ method assertFails(ast, error) {
         ast.checkType(Environment(BaseEnvironment), unknownType)
         FailedError.raise "No TypeError"
     } catch { e : error ->
-        print "(F) PASSED: Test{testNum} successfully threw -> '{e}'"
+        print "(AF) PASSED: Test{testNum} successfully threw -> '{e}'"
     } catch { e : FailedError ->
-        print "(F) -FAILED-: Test{testNum} did not throw any error"
+        print "(AF) -FAILED-: Test{testNum} did not throw any error"
     } catch { e -> 
         // Caused by coding mistakes or wrong specific error.
-        print "(F) -FAILED-: Test{testNum} threw the wrong error '{e}' instead of '{error}'"
+        print "(AF) -FAILED-: Test{testNum} threw the wrong error '{e}' instead of '{error}'"
     }
     testNum := testNum + 1
 }
@@ -839,12 +863,12 @@ method assertFails(ast, error) {
 method assertPasses(ast) {
     try {
         ast.checkType(Environment(BaseEnvironment), unknownType)
-        print "(P) PASSED: Test{testNum} did not throw 'TypeError'"
+        print "(AP) PASSED: Test{testNum} did not throw 'TypeError'"
     } catch { e : TypeError ->
-        print "(P) -FAILED-: Test{testNum} unexpectedly threw -> '{e}'"
+        print "(AP) -FAILED-: Test{testNum} unexpectedly threw -> '{e}'"
     } catch { e -> 
         // Unexpected error caused by coding mistakes.
-        print "(P) -FAILED CRITICAL-: Test{testNum} unexpectedly threw -> '{e}'"
+        print "(AP) -FAILED CRITICAL-: Test{testNum} unexpectedly threw -> '{e}'"
     }
     testNum := testNum + 1
 }
