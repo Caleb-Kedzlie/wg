@@ -292,7 +292,7 @@ class LiteralNode(nm, v, lit) {
 
 
 // Def declarations are immutable. You can get but not assign them.
-class DefNode(nm, decType, annotations, val) {
+class DefNode(nm, decType, annotations, val) { // TODO annotations.
     def name is public = "def declaration"
     def declaredName is public = nm
     def declaredType is public = if (decType.size > 0) then { decType.first } else { unknownType }
@@ -307,7 +307,7 @@ class DefNode(nm, decType, annotations, val) {
         def expectedType = env.findType(declaredType)
         def valueType = value.inferType(env)
         if (!expectedType.acceptsSubtype(valueType)) then {
-            TypeError.raise "Actual '{valueType.name}' is not a subtype of '{expectedType.name}' for {name}"
+            TypeError.raise "For {name} '{declaredName}' inferred value '{valueType.name}' is not a subtype of '{expectedType.name}'"
         }
         return doneType
     }
@@ -320,7 +320,8 @@ class DefNode(nm, decType, annotations, val) {
     }
 
     method addToEnvironment(env) {
-        def varType = env.findType(declaredType)
+        // If there is no declared type, use the inferred value instead. This fixes BlockNodes.
+        def varType = if (declaredType.name == "Unknown") then { value.inferType(env) } else { env.findType(declaredType) }
         // Getter for the variable i.e. "x" or "x()", but no assignment like "x := 3" or "x = 3", after intially set.
         def meth = NewMethod(declaredName ++ "(0)", nil, varType)
         env.addMethod(meth)
@@ -328,7 +329,7 @@ class DefNode(nm, decType, annotations, val) {
 }
 
 
-class VarNode(nm, decType, annotations, val) {
+class VarNode(nm, decType, annotations, val) { // // TODO annotations.
     def name is public = "var declaration"
     def declaredName is public = nm
     // Nil makes empty lists so declaredType and value become unknownType.
@@ -342,7 +343,7 @@ class VarNode(nm, decType, annotations, val) {
         // Check value is same type as declared. The unknownType always succeeds.
         def valueType = value.inferType(env)
         if (!expectedType.acceptsSubtype(valueType)) then {
-            TypeError.raise "The var declaration '{declaredName}' needs type: '{expectedType.name}' was: '{valueType.name}'"
+            TypeError.raise "The var declaration '{declaredName}' inferred value '{valueType.name}' is not a subtype of '{expectedType.name}'"
         }
         return doneType
     }
@@ -355,7 +356,8 @@ class VarNode(nm, decType, annotations, val) {
     }
 
     method addToEnvironment(env) {
-        def varType = env.findType(declaredType)
+        // If there is no declared type, use the inferred value instead. This fixes BlockNodes.
+        def varType = if (declaredType.name == "Unknown") then { value.inferType(env) } else { env.findType(declaredType) }
         // Get and assign for the variable i.e. "x" or "x()", and "x := 3"
         def meth = NewMethod(declaredName ++ "(0)", nil, varType)
         def methAssign = NewMethod(declaredName ++ ":=(1)", o1N(varType), doneType)
@@ -385,7 +387,7 @@ class LexicalRequestNode(meth, args, generics) {
     method checkType(env, expected) {
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Lexical request {methodName} was {expected.name} wanted {actual.name}"
+            TypeError.raise "Lexical request '{methodName}' inferred '{actual.name}' is not a subtype of '{expected.name}'"
         }
     }
 
@@ -436,11 +438,11 @@ class DotRequestNode(rec, meth, args, generics) {
 
 // Helper to add declarations for objects, methods and blocks.
 method addDeclarations(env, body) {
-    body.do { n ->
-        if ((n.name == "var declaration") || (n.name == "def declaration") ||
-            (n.name == "type declaration") || (n.name == "method declaration") ||
-            (n.name == "import statement")) then {
-            n.addToEnvironment(env)
+    body.do { expr ->
+        if ((expr.name == "var declaration") || (expr.name == "def declaration") ||
+            (expr.name == "type declaration") || (expr.name == "method declaration") ||
+            (expr.name == "import statement")) then {
+            expr.addToEnvironment(env)
         }
     }
 }
@@ -456,9 +458,9 @@ class ObjectNode(bdy, anns) {
         // The self method of this object.
         deeperEnv.addMethod(NewMethod("self(0)", nil, deeperEnv.asType))
 
-        body.do { meth ->
-            def methType = meth.inferType(deeperEnv) // TODO Maybe this should be unknown type. Checktype always runs inferType so it is a comparison with itself.
-            meth.checkType(deeperEnv, methType)
+        body.do { expr ->
+            def exprType = expr.inferType(deeperEnv) // TODO Maybe this should be unknown type. Checktype always runs inferType so it is a comparison with itself.
+            expr.checkType(deeperEnv, exprType)
             // print "Object body Type: {bodyType}"
         }
 
@@ -546,17 +548,13 @@ class MethodNode(parts, rType, anns, bdy) {
 
     // The method declaration itself returns the done type.
     method inferType(env) { 
-        return doneType 
-    }
-
-    method checkType(env, expected) {
         // Find the return type, either unknown or lexically searched.
         def returnType = env.findType(lexicalReturnType)
         // Construct deeper environment which returns this rType.
         def deeperEnv = Environment(env)
         deeperEnv.methodReturn(declaredName, returnType)
 
-        // Add the parameter getters to this environment
+        // Add the method parameter getters to this environment
         parameters.do { param ->
             if (param.name != "parameter identifier") then { TypeError.raise "Invalid case of method parameter not wrapped by identifier" }
             def paramType = env.findType(param.declaredType) // unknownType handled in findType.
@@ -565,20 +563,12 @@ class MethodNode(parts, rType, anns, bdy) {
         // Add the body declarations to this environment
         addDeclarations(deeperEnv, body)
 
-        // Check expected is doneType.
-        def actual = inferType(env)
-        if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Method expected result '{expected.name}', actually got '{actual.name}'"
-        }
-
-        // Propagate typechecks down the expression children. Also handles nested return statements.
-        body.do { expr -> expr.checkType(deeperEnv, unknownType) }
-
         // Copy the body to exclude the final expression for ensuring no early return statements.
         def bodyCopy = collections.list(body)
         def finalExpr = if (body.size == 0) then { unknownType } else { bodyCopy.removeAt(bodyCopy.size) }
         bodyCopy.do { expr ->
-            // Throw error if 'return' statement before final expression without being inside a block. TODO could extend to flag unreachable for unconditional blocks with returns.
+            // Throw error if 'return' statement before final expression without being inside a block. 
+            // TODO could extend to flag unreachable for unconditional blocks with returns.
             if (expr.name == "return statement") then { 
                 TypeError.raise "Unreachable code in method body after return" 
             }
@@ -587,6 +577,21 @@ class MethodNode(parts, rType, anns, bdy) {
         def finalType = finalExpr.inferType(deeperEnv)
         if (!returnType.acceptsSubtype(finalType)) then {
             TypeError.raise "Method expected return type '{returnType}', actually got '{finalType}' as final expression"
+        }
+
+        // Propagate typechecks down the expression children. Also finds nested return statements.
+        body.do { expr -> 
+            expr.checkType(deeperEnv, unknownType) 
+        }
+
+        return doneType 
+    }
+
+    method checkType(env, expected) {
+        // Check expected is doneType.
+        def actual = inferType(env)
+        if (!expected.acceptsSubtype(actual)) then {
+            TypeError.raise "Method expected result '{expected.name}', actually got '{actual.name}'"
         }
     }
 
@@ -628,15 +633,40 @@ class IdentifierNode(nm, decType) {
 // Block for if statement, loop, lambda etc. Expressions within two braces "{}".
 class BlockNode(params, bdy) {
     def name is public = "block"
-    def parameters = params
+    def parameters = params // Can have parameters for a lambda block.
     def body = bdy
 
     method inferType(env) {
-        return unknownType // TODO
+        // Construct deeper environment for this block.
+        def deeperEnv = Environment(env)
+
+        // Add the parameter getters to this environment and gets their types.
+        def paramTypes = parameters.map { param ->
+            if (param.name != "parameter identifier") then { TypeError.raise "Invalid case of block parameter not wrapped by identifier" }
+            def paramType = env.findType(param.declaredType) // unknownType handled in findType.
+            deeperEnv.addMethod(arglessMeth(param.declaredName ++ "(0)", paramType))
+            paramType
+        }
+        // Add the body declarations to this environment
+        addDeclarations(deeperEnv, body)
+
+        // The block return type is done by default. Updates to the final element.
+        var returnType := doneType
+        body.do { expr ->
+            returnType := expr.inferType(deeperEnv)
+            expr.checkType(deeperEnv, unknownType) // Propagate typechecks on children.
+        }
+        // Constructs the block type with a method called "apply" that takes the parameters and returns the last expr type.
+        def blockType = AnyType("Block")
+        blockType.addMethod(NewMethod("apply({parameters.size})", paramTypes, returnType))
+        return blockType
     }
 
     method checkType(env, expected) {
-        // TODO
+        def actual = inferType(env)
+        if (!expected.acceptsSubtype(actual)) then {
+            TypeError.raise "Actual '{actual}' is not a subtype of '{expected}' for {name}"
+        }
     }
 }
 
@@ -647,6 +677,7 @@ class LineupNode(elems) {
 
     method inferType(env) {
         return unknownType // TODO
+        // Typecheck the declared type against the common element type e.g. def x : List[[String]] = ["hi", "bye"]
     }
 
     method checkType(env, expected) {
@@ -695,7 +726,7 @@ class DialectNode(src) {
     }
 
     method checkType(env, expected) {
-        def actial = inferType(env)
+        def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
             TypeError.raise "Actual '{actual}' is not a subtype of '{expected}' for {name}"
         }
@@ -774,7 +805,7 @@ class Environment(par) {
 
     // Make an AnyType representation of this environment for typechecking.
     method asType {
-        def envType = AnyType("environment")
+        def envType = AnyType("Environment")
         methods.do { x ->
             envType.addMethod(x)
         }
@@ -788,15 +819,19 @@ class Environment(par) {
 class BaseEnvironment {
     def baseTypes = collections.dictionary ["Unknown" :: unknownType, "Done" :: doneType, 
                         "Boolean" :: booleanType, "Number" :: numberType, "String" :: stringType]
+    def standardMethods = collections.dictionary ["print(1)" :: NewMethod("print(1)", o1N(unknownType), doneType),
+                    "false(0)" :: arglessMeth("false(0)", booleanType), "true(0)" :: arglessMeth("true(0)", booleanType),
+                    "if(1)then(1)" :: NewMethod("if(1)then(1)", c2N(booleanType, unknownType), unknownType)] // Not sure how to implent multiPart methods.
 
     method addMethod(meth) {
         TypeError.raise "Cannot add '{meth.name}' to base environment"
     }
 
     method findMethod(name) {
-        // Could make these a list or dictionary. TODO ifelse, loops.
-        if (name == "print(1)") then { return NewMethod(name, o1N(unknownType), doneType) }
-        if ((name == "false(0)") || (name == "true(0)")) then { return arglessMeth(name, booleanType) }
+        // Lookup standard library methods. TODO ifelse and else, loops.
+        if (standardMethods.containsKey(name)) then {
+            return standardMethods.at(name)
+        }
         TypeError.raise "No method called '{name}' in scope"
     }
 
@@ -847,14 +882,14 @@ method assertFails(ast) {
 method assertFails(ast, error) {
     try {
         ast.checkType(Environment(BaseEnvironment), unknownType)
-        FailedError.raise "No TypeError"
+        FailedError.raise "No '{error}' thrown"
     } catch { e : error ->
-        print "(AF) PASSED: Test{testNum} successfully threw -> '{e}'"
+        print "(F) PASSED: Test{testNum} successfully threw -> '{e}'"
     } catch { e : FailedError ->
-        print "(AF) -FAILED-: Test{testNum} did not throw any error"
+        print "(F) -FAILED-: Test{testNum} did not throw any error"
     } catch { e -> 
         // Caused by coding mistakes or wrong specific error.
-        print "(AF) -FAILED-: Test{testNum} threw the wrong error '{e}' instead of '{error}'"
+        print "(F) -FAILED CRITICAL-: Test{testNum} threw the wrong error '{e}' instead of '{error}'"
     }
     testNum := testNum + 1
 }
@@ -863,18 +898,18 @@ method assertFails(ast, error) {
 method assertPasses(ast) {
     try {
         ast.checkType(Environment(BaseEnvironment), unknownType)
-        print "(AP) PASSED: Test{testNum} did not throw 'TypeError'"
+        print "(P) PASSED: Test{testNum} did not throw 'TypeError'"
     } catch { e : TypeError ->
-        print "(AP) -FAILED-: Test{testNum} unexpectedly threw -> '{e}'"
+        print "(P) -FAILED-: Test{testNum} unexpectedly threw -> '{e}'"
     } catch { e -> 
         // Unexpected error caused by coding mistakes.
-        print "(AP) -FAILED CRITICAL-: Test{testNum} unexpectedly threw -> '{e}'"
+        print "(P) -FAILED CRITICAL-: Test{testNum} unexpectedly threw -> '{e}'"
     }
     testNum := testNum + 1
 }
 
 
-// Eventually make it parse files directly for the tests. Add new tests to the end to not mess up test number order.
+// Eventually I will make it parse files directly for the tests. Add new tests to the end to not mess up test number order.
 
 // TEST 1
 // 3
@@ -942,8 +977,6 @@ assertFails(o0C(c2N(d3F("x",nil,nil,n0M(3)),d0R(n0M(1),"+(1)",o1N(d0R(l0R("x(0)"
 // TEST 15
 // var x : String := "test"
 assertPasses(o0C(o1N(v4R("x",o1N(l0R("String(0)",nil,nil)),nil,o1N(s0L("test")))),nil))
-
-// The only current standard library method: print(1). TODO if(1)else(1), for/while loops.
 
 // TEST 16
 // print "Hello, world"
@@ -1019,61 +1052,119 @@ assertPasses(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(nil,nil))
 // if (true) then { b -> 1 }
 assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(o1N(i0D("b",nil)),o1N(n0M(1)))),nil)),nil))
 
-// TEST 32
+// TEST 33
 // if (true) then { b : Number -> 1 }
 assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(o1N(i0D("b",o1N(l0R("Number(0)",nil,nil)))),o1N(n0M(1)))),nil)),nil))
 
 // TODO make many more method tests for all edge cases.
 
-// TEST 33
+// TEST 34
 // method test {}
 assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,nil)),nil))
 
-// Test 34
+// Test 35
 // method test(x : String, y: Number) when(z : Boolean) {}
 assertPasses(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil),p0T("when",o1N(i0D("z",o1N(l0R("Boolean(0)",nil,nil)))),nil)),nil,nil,nil)),nil))
 
-// Test 35
+// Test 36
 // method test(x : String, y: Number) when(z : Boolean) { "x: {x}, y: {y}, z: {z}" }
 assertPasses(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil),p0T("when",o1N(i0D("z",o1N(l0R("Boolean(0)",nil,nil)))),nil)),nil,nil,o1N(i0S("x: ",l0R("x(0)",nil,nil),i0S(", y: ",l0R("y(0)",nil,nil),i0S(", z: ",l0R("z(0)",nil,nil),s0L(""))))))),nil))
 
-// Test 36
+// Test 37
 // method test(x : String, y: Number) when(z : Boolean) { x+y+z }
 assertFails(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil),p0T("when",o1N(i0D("z",o1N(l0R("Boolean(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil),"+(1)",o1N(l0R("z(0)",nil,nil)),nil)))),nil))
 
-// Test 37
+// Test 38
 // method test(x : String, y: Number) { x + y }
 assertFails(o0C(o1N(m0D(o1N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil)))),nil))
 
-// Test 38
+// Test 39
 // method test(x : String, y: Number) { print(x)
 //    print(y) }
 assertPasses(o0C(o1N(m0D(o1N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil)),nil,nil,c2N(l0R("print(1)",o1N(l0R("x(0)",nil,nil)),nil),l0R("print(1)",o1N(l0R("y(0)",nil,nil)),nil)))),nil))
 
-// Test 39
+// Test 40
 // method test(x : String, y: Number) { x ++ " y {y}" }
 assertPasses(o0C(o1N(m0D(o1N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(l0R("x(0)",nil,nil),"++(1)",o1N(i0S(" y ",l0R("y(0)",nil,nil),s0L(""))),nil)))),nil))
 
-// Test 40
+// Test 41
 // method test -> String { return "Test" }
 assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,o1N(r3T(s0L("Test"))))),nil))
 
-// Test 41
+// Test 42
 // method test -> String { return 4 }
 assertFails(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,o1N(r3T(n0M(4))))),nil))
 
-// Test 42 (implicit return)
+// Test 43 (implicit return)
 // method test -> String { 4 }
 assertFails(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,o1N(n0M(4)))),nil))
 
-// Test 43
+// Test 44
 // method test -> String { 4
 //    "returned" }
-assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,c2N(n0M(4),s0L("returned")))),nil))
+// def x : String = test
+assertPasses(o0C(c2N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,c2N(n0M(4),s0L("returned"))),d3F("x",o1N(l0R("String(0)",nil,nil)),nil,l0R("test(0)",nil,nil))),nil))
 
-// Test 44
+// Test 45
 // "\\$\"\n\r\{*~`^@%#!" ++ "test"
 assertPasses(o0C(o1N(d0R(s0L(s4F("", c9B, s4F("", c9D, s4F("",c9Q,s4F("",c9N,s4F("",c9R,s4F("",c9L,s4F("",c9S,s4F("",c9T,s4F("",c9G,s4F("",c9C,s4F("",c9A,s4F("",c9P,s4F("",c9H,s4F("",c9E,""))))))))))))))),"++(1)",o1N(s0L("test")),nil)),nil))
+
+// Test 46
+// def x = { a -> 1 }
+assertPasses(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(n0M(1))))),nil))
+
+// Test 47
+// def x = { a -> a + 1 }
+// x.apply(1)
+assertPasses(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(n0M(1)),nil)),nil))
+
+// Test 48
+// def x = { a -> a + 1 }
+// x.apply("test")
+assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(s0L("test")),nil)),nil))
+
+// Test 49
+// def x : String = {a -> a}
+assertFails(o0C(o1N(d3F("x",o1N(l0R("String(0)",nil,nil)),nil,b1K(o1N(i0D("a",nil)),o1N(l0R("a(0)",nil,nil))))),nil))
+
+// Test 50
+// def x = {a -> a} 
+// def y : String = x
+assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("a(0)",nil,nil)))),d3F("y",o1N(l0R("String(0)",nil,nil)),nil,l0R("x(0)",nil,nil))),nil))
+
+// Test 51
+// def x = {a : Number -> a + "Test"}
+assertFails(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)))),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(s0L("Test")),nil))))),nil))
+
+// Test 52
+// def x = {a : Number -> a ++ "Test"}
+assertFails(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)))),o1N(d0R(l0R("a(0)",nil,nil),"++(1)",o1N(s0L("Test")),nil))))),nil))
+
+
+// Test ? put after lineups.
+// def x = { a -> a + 1 }
+// [1, 2, 3].map { e -> x.apply(e) }
+// assertPasses(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0N(c0N(n0M(1),c2N(n0M(2),n0M(3)))),"map(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
+// Test ? put after lineups.
+// def x = { a -> a + 1 }
+// ["test", 2, "yes"].map { e -> x.apply(e) }
+// assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0N(c0N(s0L("test"),c2N(n0M(2),s0L("yes")))),"map(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
+
+// Test ?
+// def x = { a -> print(a + 1) }
+// [1, 2, 3].do { e -> x.apply(e) }
+// assertPasses(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("print(1)",o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)),nil)))),d0R(l0N(c0N(n0M(1),c2N(n0M(2),n0M(3)))),"do(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
+// Test ?
+// def x = { a -> print(a + 1) }
+// ["test", 2, "yes"].do { e -> x.apply(e) }
+// assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("print(1)",o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)),nil)))),d0R(l0N(c0N(s0L("test"),c2N(n0M(2),s0L("yes")))),"do(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
+
+
+// Test ?
+// def x = { a -> a + 1 }
+// x.apply(["test", "str"])
+// assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0N(c2N(s0L("test"),s0L("str")))),nil)),nil))
+
 
 // TODO I think this should fail because Test refers to both. Many other edge cases like this with variables or parameters or new types with the same name.
 // def Test = object {}
