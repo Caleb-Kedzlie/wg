@@ -504,7 +504,7 @@ class ObjectNode(bd, anns) {
             }
         }
         newEnv.replace(aMethod("self(0)", nil, newEnv.asType))
-        body.each { n -> // Redundant, only for debugging?
+        body.each { n ->
             def it = n.infer(newEnv)
             // print "inferred type: {it.shortName} {it.longString}"
             n.check(newEnv, unknownType)

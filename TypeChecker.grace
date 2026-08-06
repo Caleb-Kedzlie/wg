@@ -821,7 +821,30 @@ class BaseEnvironment {
                         "Boolean" :: booleanType, "Number" :: numberType, "String" :: stringType]
     def standardMethods = collections.dictionary ["print(1)" :: NewMethod("print(1)", o1N(unknownType), doneType),
                     "false(0)" :: arglessMeth("false(0)", booleanType), "true(0)" :: arglessMeth("true(0)", booleanType),
-                    "if(1)then(1)" :: NewMethod("if(1)then(1)", c2N(booleanType, unknownType), unknownType)] // Not sure how to implent multiPart methods.
+                    "if(1)then(1)" :: createIfElse(0, false),
+                    "if(1)then(1)else(1)" :: createIfElse(0, true),
+                    "if(1)then(1)elseif(1)then(1)" :: createIfElse(1, false),
+                    "if(1)then(1)elseif(1)then(1)else(1)" :: createIfElse(1, true),
+                    "if(1)then(1)elseif(1)then(1)elseif(1)then(1)" :: createIfElse(2, false),
+                    "if(1)then(1)elseif(1)then(1)elseif(1)then(1)else(1)" :: createIfElse(2, true)] 
+    // TODO could make generic function if method name starts with "if(1)then(1)" then it looks for 0+ "elseif(1)then(1)"* and optional "else(1)" at end.
+                    
+    // Helper to make standard library if/elseif/else cases TODO use blockType for 'then' or 'else' param instead of unknownType.
+    method createIfElse(elseifCount : Number, hasElse : Boolean) is private {
+        var name := "if(1)then(1)"
+        var params := c2N(booleanType, unknownType)
+        for (1..elseifCount) do {
+            name := name ++ "elseif(1)then(1)
+            // Add the condition and block.
+            params.add(booleanType)
+            params.add(unknownType)
+        }
+        if (hasElse) then { 
+            name := name ++ "else(1)"
+            params.add(unknownType)
+        }
+        return NewMethod(name, params, unknownType)
+    }
 
     method addMethod(meth) {
         TypeError.raise "Cannot add '{meth.name}' to base environment"
