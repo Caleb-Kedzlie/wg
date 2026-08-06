@@ -31,7 +31,7 @@ var z is readable, writable := "Z" // annotated to give public access (from anot
 true
 false      // Booleans
 "Hello World!"
-"fruit\tcost"       // string with escape for tab 
+"fruit  cost"       // string with escape for tab 
 "1 + 2 = {1 + 2}"   // string with interpolation
 {two.something}     // block (lambda expression) without parameters
 { j -> print(j)}    // blocks with parameters
@@ -159,13 +159,25 @@ try {
 [ print 1, print 2, print 3 ]
 
 
-//type A = interface {
-//    foo -> Number
-//}
+type A = interface {}
+type B = interface {}
+// A and B (intersection).
+var x : A & B := object {}
+// A or B (union).
+var x : A | B := object {}
 
-//type B = interface {
-//    bar -> String
-//}
+// Can use union in type:
+type C = A | B
+var x : C := object {}
+// But for some reason the parser doesn't work with this.
+//type D = A & B
+//var x : D := object {}
+def x : String = "hi"
+
+//assert (B <: A) description "B does not conform to A"
+
+
+
 
 // There is A | B not A & B that has to be done manually like this:
 //type AandB = interface {
@@ -173,13 +185,3 @@ try {
 //    bar -> String
 //}
 
-var x : AandB := object {
-    method foo { 1 }
-    method bar { "hi" }
-}
-
-// Wouldn't work.
-var x : A | B := object {
-    method foo { 1 }
-    method bar { "hi" }
-}

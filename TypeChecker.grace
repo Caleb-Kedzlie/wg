@@ -56,7 +56,7 @@ method isNil(val) {
 method n0M(v) { LiteralNode("number value", v, numberType) }
 method s0L(v) { LiteralNode("string value", v, stringType) }
 
-// Interpolated string for formatting. e.g. "price is {y} dollars." -> prefix="price is ", expr={y}, and suffix=" dollars."
+// Interpolated string for formatting, e.g. "price is {y} dollars." -> prefix="price is ", expr={y}, and suffix=" dollars."
 method i0S(prefix, expr, suffix) { InterpolatedStringNode(prefix, expr, suffix) }
 
 // SafeStr for formatting special characters with prefix/suffix.
@@ -83,17 +83,11 @@ method a5N(lhs, rhs) {
     unknownType 
 } 
 
-// Type and interface declaration.
-method t0D(name, genericParams, value) {
-    //TODO
-    unknownType
-} 
-method i0C(body) {
-    //TODO
-    unknownType
-}
+// Type and interface declaration, e.g. type A = interface {}
+method t0D(name, genericParams, value) { TypeNode(name, genericParams, value) } 
+method i0C(body) { InterfaceNode(body) }
 
-// Method signature (in interfaces).
+// Method signature (without a body, used in interfaces).
 method m0S(parts, rType) { MethodSignatureNode(parts, rType) }
 // Method declaration (includes annotations and body).
 method m0D(parts, rType, anns, body) { MethodNode(parts, rType, anns, body) }
@@ -104,10 +98,10 @@ method l0R(name, args, genericParams) { LexicalRequestNode(name, args, genericPa
 // Explicit/dot request of variable/methods.
 method d0R(receiver, name, args, genericParams) { DotRequestNode(receiver, name, args, genericParams) }
 
-// Individual part of a method signature. e.g. foo(a) in: method foo(a) bar(b)
+// Individual part of a method signature, e.g. foo(a) in "method foo(a) bar(b)"
 method p0T(name, params, genericParams) { PartNode(name, params, genericParams) }
 
-// Parameter type identifier in a method signature part. e.g. "a : String" within "method foo(a : String, b : Number)".
+// Parameter type identifier in a method signature part, e.g. "a : String" within "method foo(a : String, b : Number)".
 method i0D(name, dType) { IdentifierNode(name, dType) }
 
 // The constructor of an object. Also used as the root node AST.
@@ -119,13 +113,13 @@ method r3T(value) { ReturnNode(value) }
 // Comment. Gets excluded from the body of objects, methods and blocks.
 method c0M(text) { CommentNode(text) }
 
-// Lineup infers each element between square brackets: [1, 2, 3]
+// Lineup infers each element between square brackets "[1, 2, 3]"
 method l0N(elems) { LineupNode(elems) }
 
-// Import statement using source string. e.g. import "ast" as ast
+// Import statement using source string, e.g. import "ast" as ast
 method i0M(source, binding) { ImportNode(source, binding) }
 
-// Dialect Statement that extends the Grace language using source string. e.g. dialect "name"
+// Dialect Statement that extends the Grace language using source string, e.g. dialect "name"
 method d0S(source) { DialectNode(source) }
 
 
@@ -263,7 +257,7 @@ def unknownType = object {
 def numberType = AnyType("Number")
 def stringType = AnyType("String")
 def booleanType = AnyType("Boolean")
-// Similar to void: def/var use this type when done.
+// Similar to void, def/var use this type when done.
 def doneType = AnyType("Done")
 numberType.setupMethods(c0N(sameArgMeth("+(1)", numberType), c2N(sameArgMeth("*(1)", numberType), sameArgMeth("..(1)", numberType))))
 stringType.setupMethods(c2N(sameArgMeth("++(1)", stringType), arglessMeth("size(0)", numberType)))
@@ -285,7 +279,7 @@ class LiteralNode(nm, v, lit) {
     method checkType(env, expected) { // Expected and Actual are AnyType literals.
         def actual = self.inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual '{actual}' is not a subtype of expected '{expected}' for {name}" 
+            TypeError.raise "Actual type '{actual}' is not a subtype of expected '{expected}' for {name}" 
         }
     }
 }
@@ -299,9 +293,13 @@ class DefNode(nm, decType, annotations, val) { // TODO annotations.
     def value is public = if (isNil(val)) then { unknownType } else { val }
 
     method inferType(env) {
+        return doneType
+    }
+
+    method checkType(env, expected) {
         // Def needs initial value, so if it is nil (uses unknownType), raise TypeError.
         if (value.name == "Unknown") then {
-            TypeError.raise "Def needs initial value"
+            TypeError.raise "{name} needs initial value"
         }
         // Find and compare value with declared type.
         def expectedType = env.findType(declaredType)
@@ -309,13 +307,11 @@ class DefNode(nm, decType, annotations, val) { // TODO annotations.
         if (!expectedType.acceptsSubtype(valueType)) then {
             TypeError.raise "For {name} '{declaredName}' inferred value '{valueType.name}' is not a subtype of '{expectedType.name}'"
         }
-        return doneType
-    }
-
-    method checkType(env, expected) {
+        
+        // Check expected is doneType.
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Def declaration invalid, expected '{expected.name}', actual '{actual.name}'"
+            TypeError.raise "{name} invalid, expected type '{expected.name}', actual '{actual.name}'"
         }
     }
 
@@ -329,7 +325,7 @@ class DefNode(nm, decType, annotations, val) { // TODO annotations.
 }
 
 
-class VarNode(nm, decType, annotations, val) { // // TODO annotations.
+class VarNode(nm, decType, annotations, val) { // TODO annotations.
     def name is public = "var declaration"
     def declaredName is public = nm
     // Nil makes empty lists so declaredType and value become unknownType.
@@ -337,21 +333,20 @@ class VarNode(nm, decType, annotations, val) { // // TODO annotations.
     def value is public = if (isNil(val)) then { unknownType } else { val.first } // Always a list, unlike DefNode.
 
     method inferType(env) {
-        // Infer environment types that are not unknown.
-        def expectedType = env.findType(declaredType)
-
-        // Check value is same type as declared. The unknownType always succeeds.
-        def valueType = value.inferType(env)
-        if (!expectedType.acceptsSubtype(valueType)) then {
-            TypeError.raise "The var declaration '{declaredName}' inferred value '{valueType.name}' is not a subtype of '{expectedType.name}'"
-        }
         return doneType
     }
 
     method checkType(env, expected) {
+        // Check value is same type as declared. The unknownType always succeeds.
+        def expectedType = env.findType(declaredType)
+        def valueType = value.inferType(env)
+        if (!expectedType.acceptsSubtype(valueType)) then {
+            TypeError.raise "The var declaration '{declaredName}' inferred value '{valueType.name}' is not a subtype of '{expectedType.name}'"
+        }
+
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Var declarion invalid, expected: '{expected.name}', actual: '{actual.name}'"
+            TypeError.raise "Var declarion invalid, expected '{expected.name}', Actual type '{actual.name}'"
         }
     }
 
@@ -426,7 +421,7 @@ class DotRequestNode(rec, meth, args, generics) {
     method checkType(env, expected) {
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Dot request {receiver.name}.{methodName} was {expected.name} wanted {actual.name}"
+            TypeError.raise "Dot request {receiver.name}.{methodName} expected '{expected.name}', but actually returned '{actual.name}'"
         }
     }
 
@@ -461,7 +456,7 @@ class ObjectNode(bdy, anns) {
         body.do { expr ->
             def exprType = expr.inferType(deeperEnv) // TODO Maybe this should be unknown type. Checktype always runs inferType so it is a comparison with itself.
             expr.checkType(deeperEnv, exprType)
-            // print "Object body Type: {bodyType}"
+            // print "Object body Type {bodyType}"
         }
 
         return deeperEnv.asType
@@ -503,13 +498,13 @@ class ReturnNode(val) {
         def expected = env.getReturnType // Recursive lookup.
         def valueType = inferType(env)
         if (!expected.acceptsSubtype(valueType)) then {
-            TypeError.raise "Return statement value type: '{valueType.name}' not a subtype of expected type '{expected.name}'"
+            TypeError.raise "Return statement value type '{valueType.name}' is not a subtype of expected type '{expected.name}'"
         }
     }
 }
 
 
-// Intepolate/format variables inside strings with curly brace notation. e.g. "x is {x}"
+// Intepolate/format variables inside strings with curly brace notation, e.g. "x equals {x}"
 class InterpolatedStringNode(pre, expr, suff) {
     def name is public = "string interpolation"
     def prefix is public = pre
@@ -528,7 +523,7 @@ class InterpolatedStringNode(pre, expr, suff) {
         // This node should always be a stringType.
         def actual = self.inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual '{actual}' is not a subtype of '{expected}' for {name}" 
+            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
     }
 }
@@ -537,9 +532,9 @@ class InterpolatedStringNode(pre, expr, suff) {
 // Actual method declaration in the parsed script (as AST).
 class MethodNode(parts, rType, anns, bdy) {
     def name is public = "method declaration"
-    // Merge all the method parts. e.g. "method foo(a) bar(b, c)" turns into "foo(1)bar(2)"
+    // Merge all the method parts, e.g. "method foo(a) bar(b, c)" turns into "foo(1)bar(2)"
     def declaredName is public = parts.map { part -> "{part.declaredName}({part.parameters.size})" }.join("")
-    def parameters is public = parts.flatMap { part -> part.parameters } // Merges into single list.
+    def parameters is public = parts.flatMap { part -> part.parameters } // Merges into single list of of identifier nodes.
 
     // Store return type, unknownType if nil.
     def lexicalReturnType is public = if (isNil(rType)) then { unknownType } else { rType.first } 
@@ -608,21 +603,25 @@ class MethodNode(parts, rType, anns, bdy) {
 }
 
 
+// Method signature within an interface, e.g. interface { foo(a) -> String }
 class MethodSignatureNode(parts, rType) {
-    //TODO
+    def name is public = "method signature"
+    def declaredName is public = parts.map { part -> "{part.declaredName}({part.parameters.size})" }.join("")
+    def parameters is public = parts.flatMap { part -> part.parameters } // Merges into single list of identifier nodes.
+    def lexicalReturnType is public = if (isNil(rType)) then { unknownType } else { rType.first } // unknownType if nil.
 }
 
 
-// The named parts of a method. e.g. "foo(x)" in "method foo(x) bar(y) {}"
+// The named parts of a method, e.g. "foo(x)" in "method foo(x) bar(y) {}"
 class PartNode(nm, params, generics) {
     def name is public = "method part"
     def declaredName is public = nm
-    def parameters is public = params // List of parameter identifiers. e.g. (name : type).
-    def genericParams is public = generics
+    def parameters is public = params // List of parameter identifiers, e.g. (name : type).
+    def genericParams is public = generics // Unused currently.
 }
 
 
-// A parameters declared name and type (potentially absent) or generic name. e.g. "x : T" or "[[T]]" in "method test[[T]](x : T)"
+// A parameters declared name and type (potentially absent) or generic name, e.g. "x : T" or "[[T]]" in "method test[[T]](x : T)"
 class IdentifierNode(nm, decType) {
     def name is public = "parameter identifier"
     def declaredName is public = nm
@@ -665,10 +664,80 @@ class BlockNode(params, bdy) {
     method checkType(env, expected) {
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual '{actual}' is not a subtype of '{expected}' for {name}"
+            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}"
         }
     }
 }
+
+
+// Type declaration for a new
+class TypeNode(nm, genericParams, val) {
+    def name is public = "type"
+    def declaredName is public = nm
+    def genericParams is public = generics
+    def value is public = if (isNil(val)) then { unknownType } else { val }
+
+    method inferType(env) {
+        return doneType
+    }
+
+    method checkType(env, expected) {
+        // Type declarations need initial value, so if it is nil (uses unknownType), raise TypeError.
+        if (value.name == "Unknown") then {
+            TypeError.raise "{name} needs initial value"
+        }
+        value.checkType(env, unknownType) // Typecheck the value (typically an interface).
+
+        def actual = self.inferType(env)
+        if (!expected.acceptsSubtype(actual)) then {
+            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
+        }
+    }
+
+    // Add to environment for typechecking.
+    method addToEnvironment(env) {
+        def valueType = env.findType(value)
+        env.addType(declaredName, valueType)
+    }
+}
+
+
+class InterfaceNode(bdy) {
+    def body is public = bdy
+
+    method inferType(env) {
+        return doneType
+    }
+
+    method checkType(env, expected) {
+        // Ensure the interface body only has method signatures.
+        body.do { expr ->
+            if (exprType.name != "method signature") then {
+                TypeError.raise "Only method signautures can be in an interface body, not '{exprType.name}'"
+            }
+        }
+        // Check it still expects doneType.
+        def actual = self.inferType(env)
+        if (!expected.acceptsSubtype(actual)) then {
+            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
+        }
+    }
+
+    method asType {
+        def interfaceType = AnyType("Interface")
+        body.do { s ->
+            def meth = s.asMethod
+            // TODO convert signature into method then add to environment.
+
+
+            interfaceType.addMethod(meth)
+        }
+        return interfaceType
+    }
+}
+
+
+
 
 
 class LineupNode(elems) {
@@ -700,13 +769,13 @@ class ImportNode(src, bind) {
         // Check doneType matching expected.
         def actial = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual '{actual}' is not a subtype of '{expected}' for {name}" 
+            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
 
         // TODO Is it possible to typecheck the declaredType.
         //def decType = env.findType(declaredType)
         //if (!expected.acceptsSubtype(decType)) then {
-        //    TypeError.raise "Declared '{decType.name}' is not a subtype of '{expected.name}'"
+        //    TypeError.raise "Declared type '{decType.name}' is not a subtype of '{expected.name}'"
         //}
     }
 
@@ -728,7 +797,7 @@ class DialectNode(src) {
     method checkType(env, expected) {
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual '{actual}' is not a subtype of '{expected}' for {name}"
+            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}"
         }
     }
 }
@@ -740,7 +809,7 @@ class Environment(par) {
     inherit BaseEnvironment
     def parent = par
     var methods := nil // Storing methods and variable getters.
-    var types := nil // For type declaration nodes.
+    var types := collections.dictionary [] // For type declaration nodes.
     // These two are used if this environment itself is a method.
     var returnType := nil
     var declaredName := nil
@@ -786,20 +855,23 @@ class Environment(par) {
     }
 
 
+    // Add a type declaration.
+    method addType(nm, val) {
+        types.at(nm) put(val)
+        // TODO throw error if name already exists or maybe leave as is so it shadows by overriding at value.
+    }
+
     method findType(expr) is override {
-        // TODO
-        //if (expr.name == "lexical request") then {
-            //def methodName = expr.methodName
-            //def name = methodName.substringFrom(1)to(methodName.size - 3)
+        // Lexical request for types, BaseEnvironment has the default types such as String, Number and Boolean.
+        if (expr.name == "lexical request") then {
+            def methodName = expr.methodName
+            def name = methodName.substringFrom(1)to(methodName.size - 3)
             
-            // Search through custom declared types.
-            // TODO Need an 'addType' method that creates name, value pairs. Or better: use a dictionary instead of objects with two fields.
-            //types.do { t ->
-            //    if (t.name == name) then {
-            //        return t.value
-            //    }
-            //}
-        //}
+            // Search through declared types.
+            if (types.containsKey(name)) then {
+                return types.at(name)
+            }
+        }
         return parent.findType(expr)
     }
 
@@ -829,12 +901,12 @@ class BaseEnvironment {
                     "if(1)then(1)elseif(1)then(1)elseif(1)then(1)else(1)" :: createIfElse(2, true)] 
     // TODO could make generic function if method name starts with "if(1)then(1)" then it looks for 0+ "elseif(1)then(1)"* and optional "else(1)" at end.
                     
-    // Helper to make standard library if/elseif/else cases TODO use blockType for 'then' or 'else' param instead of unknownType.
+    // Helper to make standard library if/elseif/else cases.
     method createIfElse(elseifCount : Number, hasElse : Boolean) is private {
         var name := "if(1)then(1)"
         var params := c2N(booleanType, unknownType)
         for (1..elseifCount) do {
-            name := name ++ "elseif(1)then(1)
+            name := name ++ "elseif(1)then(1)"
             // Add the condition and block.
             params.add(booleanType)
             params.add(unknownType)
@@ -1196,6 +1268,6 @@ assertFails(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)
 
 
 // Complex test in file: sample.grace
-// assertPasses(o0C(c0N(i0M("ast",i0D("ast",nil)),c0N(c0M(" This file makes use of all AST nodes"),c2N(d3F("x",nil,nil,o0C(c2N(v4R("y",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),m0D(c2N(p0T("foo",o1N(i0D("arg",o1N(l0R("Action(0)",nil,nil)))),nil),p0T("bar",o1N(i0D("n",nil)),nil)),o1N(l0R("String(0)",nil,nil)),nil,c2N(a5N(d0R(l0R("self(0)",nil,nil),"y(0)",nil,nil),d0R(d0R(l0R("arg(0)",nil,nil),"apply(0)",nil,nil),"+(1)",o1N(l0R("n(0)",nil,nil)),nil)),r3T(i0S(s4F("y ",c9A," "),l0R("y(0)",nil,nil),s0L(s4F("",c9E,""))))))),nil)),l0R("print(1)",o1N(d0R(l0R("x(0)",nil,nil),"foo(1)bar(1)",c2N(b1K(nil,o1N(n0M(2))),n0M(3)),nil)),nil)))),nil))
+// assertPasses(o0C(c0N(i0M("ast",i0D("ast",nil)),c0N(c0M(" This file makes use of many AST nodes"),c2N(d3F("x",nil,nil,o0C(c2N(v4R("y",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),m0D(c2N(p0T("foo",o1N(i0D("arg",o1N(l0R("Action(0)",nil,nil)))),nil),p0T("bar",o1N(i0D("n",nil)),nil)),o1N(l0R("String(0)",nil,nil)),nil,c2N(a5N(d0R(l0R("self(0)",nil,nil),"y(0)",nil,nil),d0R(d0R(l0R("arg(0)",nil,nil),"apply(0)",nil,nil),"+(1)",o1N(l0R("n(0)",nil,nil)),nil)),r3T(i0S(s4F("y ",c9A," "),l0R("y(0)",nil,nil),s0L(s4F("",c9E,""))))))),nil)),l0R("print(1)",o1N(d0R(l0R("x(0)",nil,nil),"foo(1)bar(1)",c2N(b1K(nil,o1N(n0M(2))),n0M(3)),nil)),nil)))),nil))
 
 // TODO make more complex tests that should pass or fail.

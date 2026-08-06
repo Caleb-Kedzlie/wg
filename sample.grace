@@ -1,6 +1,6 @@
 import "ast" as ast
 
-// This file makes use of all AST nodes
+// This file makes use of many AST nodes
 
 def x = object {
     var y : Number := 1
