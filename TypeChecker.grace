@@ -609,6 +609,16 @@ class MethodSignatureNode(parts, rType) {
     def declaredName is public = parts.map { part -> "{part.declaredName}({part.parameters.size})" }.join("")
     def parameters is public = parts.flatMap { part -> part.parameters } // Merges into single list of identifier nodes.
     def lexicalReturnType is public = if (isNil(rType)) then { unknownType } else { rType.first } // unknownType if nil.
+
+    // TODO ensure this works.
+    method asMethod(env) {
+        // Lexically finds the return type literal.
+        def returnType = env.findType(lexicalReturnType)
+        // CheckType already enforces all params are IdentifierNodes. Lexically finds the param types.
+        def paramTypes = parameters.map { param -> env.findType(param.declaredType) }
+        // Add NewMethod object to environment.
+        return NewMethod(declaredName, paramTypes, returnType)
+    }
 }
 
 
@@ -672,7 +682,7 @@ class BlockNode(params, bdy) {
 
 // Type declaration for a new
 class TypeNode(nm, genericParams, val) {
-    def name is public = "type"
+    def name is public = "type declaration"
     def declaredName is public = nm
     def genericParams is public = generics
     def value is public = if (isNil(val)) then { unknownType } else { val }
@@ -694,7 +704,7 @@ class TypeNode(nm, genericParams, val) {
         }
     }
 
-    // Add to environment for typechecking.
+    // Add type to environment for typechecking new types from findType.
     method addToEnvironment(env) {
         def valueType = env.findType(value)
         env.addType(declaredName, valueType)
@@ -725,11 +735,9 @@ class InterfaceNode(bdy) {
 
     method asType {
         def interfaceType = AnyType("Interface")
-        body.do { s ->
-            def meth = s.asMethod
-            // TODO convert signature into method then add to environment.
-
-
+        body.do { sig ->
+            // Convert method signatures into NewMethod format then add to the environment.
+            def meth = sig.asMethod(env)
             interfaceType.addMethod(meth)
         }
         return interfaceType
