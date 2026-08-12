@@ -172,10 +172,15 @@ var x : C := object {}
 // But for some reason the parser doesn't work with this.
 //type D = A & B
 //var x : D := object {}
-def x : String = "hi"
+//def x : String = "hi"
 
 //assert (B <: A) description "B does not conform to A"
 
+// This should work but it doesn't because it cannot resolve Number/String in an interface.
+//type B = interface {
+//    foo(a) -> Number
+//}
+//def x : String = "hi"
 
 
 
@@ -185,3 +190,11 @@ def x : String = "hi"
 //    bar -> String
 //}
 
+
+// I think my typechecker should throw errors if matching names between all of these cases.
+// Since most are represented as methods, it just checks for matching name between methods/types in same (or outer?) scope.
+type Test = interface {}
+class Test {}
+method Test {}
+def Test = object {}
+def Test = 3

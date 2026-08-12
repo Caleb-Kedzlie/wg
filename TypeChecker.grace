@@ -681,7 +681,7 @@ class BlockNode(params, bdy) {
 
 
 // Type declaration for a new
-class TypeNode(nm, genericParams, val) {
+class TypeNode(nm, generics, val) {
     def name is public = "type declaration"
     def declaredName is public = nm
     def genericParams is public = generics
@@ -706,13 +706,15 @@ class TypeNode(nm, genericParams, val) {
 
     // Add type to environment for typechecking new types from findType.
     method addToEnvironment(env) {
-        def valueType = env.findType(value)
+        // Either it gets the type representation of an interface, or it looks up an already defined type. e.g. String
+        def valueType = if (value.name == "interface") then { value.asType(env) } else { env.findType(value) }
         env.addType(declaredName, valueType)
     }
 }
 
 
 class InterfaceNode(bdy) {
+    def name is public = "interface"
     def body is public = bdy
 
     method inferType(env) {
@@ -733,7 +735,7 @@ class InterfaceNode(bdy) {
         }
     }
 
-    method asType {
+    method asType(env) {
         def interfaceType = AnyType("Interface")
         body.do { sig ->
             // Convert method signatures into NewMethod format then add to the environment.
@@ -865,8 +867,11 @@ class Environment(par) {
 
     // Add a type declaration.
     method addType(nm, val) {
+        // TODO could recursively lookup types. And check matching method names for conflicts as well.
+        if (types.containsKey(nm)) then {
+            TypeError.raise "Same name {nm} used for a type declaration already"
+        }
         types.at(nm) put(val)
-        // TODO throw error if name already exists or maybe leave as is so it shadows by overriding at value.
     }
 
     method findType(expr) is override {
@@ -1243,6 +1248,26 @@ assertFails(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)
 // def x = {a : Number -> a ++ "Test"}
 assertFails(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)))),o1N(d0R(l0R("a(0)",nil,nil),"++(1)",o1N(s0L("Test")),nil))))),nil))
 
+// Test 53
+//type A = interface {}
+//type B = interface {}
+//var x : A
+//var y : B := x
+assertPasses(o0C(c0N(t0D("A",nil,i0C(nil)),c0N(t0D("B",nil,i0C(nil)),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
+
+// Test 54
+//type A = interface {
+//    foo -> A
+//}
+//type B = interface {
+//    foo -> B
+//}
+//var x : A
+//var y : B = x
+assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
+
+// Test 55
+assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),c0N(v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil))),c0N(t0D("X",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil)))),nil)),nil)))),c0N(t0D("Y",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),nil)))),c0N(t0D("Z",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),nil)))),c0N(t0D("X2",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil)))),nil)),o1N(d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil)))))),c2N(t0D("Y",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("A(0)",nil,nil)))))),t0D("Z",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))))))))))))))),nil))
 
 // Test ? put after lineups.
 // def x = { a -> a + 1 }
