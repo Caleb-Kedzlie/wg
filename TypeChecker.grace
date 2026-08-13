@@ -6,6 +6,7 @@ def TypeError = Exception.refine "TypeError"
 def FailedError = Exception.refine "FailedError"
 
 def MethodError = TypeError.refine "MethodError"
+def ObjectError = TypeError.refine "ObjectError"
 // TODO error type for all if not most nodes and then make tests check for more specific errors to ensure correct cause.
 
 
@@ -14,7 +15,7 @@ def MethodError = TypeError.refine "MethodError"
 //
 
 
-// Other AST for special character constants.
+// AST for special character constants.
 def c9D = "$"
 def c9B = "\\"
 def c9Q = "\""
@@ -30,9 +31,7 @@ def c9P = "%"
 def c9H = "#"
 def c9E = "!"
 // To check if special character is in SafeString.
-def specialChars = collections.list [
-    c9B, c9D, c9S, c9L, c9N, c9R, c9Q, 
-    c9T, c9C, c9G, c9A, c9P, c9H, c9E]
+def specialChars = collections.list [c9B, c9D, c9S, c9L, c9N, c9R, c9Q, c9T, c9C, c9G, c9A, c9P, c9H, c9E]
 
 
 // Short form AST to instantiate list nodes for the type checker.
@@ -65,7 +64,6 @@ method s4F(prefix, expr, suffix) {
     if (!specialChars.contains { char -> char == expr }) then { 
         TypeError.raise "'{expr}' is not a special character expression in the safe String" 
     }
-
     // Prefix is normal string, expr is special character as string, suffix is string (or s4F returning string).
     return prefix ++ expr ++ suffix
 }
@@ -114,7 +112,7 @@ method r3T(value) { ReturnNode(value) }
 method c0M(text) { CommentNode(text) }
 
 // Lineup infers each element between square brackets "[1, 2, 3]"
-method l0N(elems) { LineupNode(elems) }
+method l0N(elems) { LineupNode(elems) } // TODO
 
 // Import statement using source string, e.g. import "ast" as ast
 method i0M(source, binding) { ImportNode(source, binding) }
@@ -371,7 +369,7 @@ class LexicalRequestNode(meth, args, generics) {
 
     // Checks the method exists in the environment and returns the return type of it.
     method inferType(env) {
-        def targetMethod = env.findMethod(methodName)
+        def targetMethod = env.findMethod(methodName) // Throws error if not found.
         // Check that the method takes the inferred arguments.
         def argumentTypes = arguments.map { a -> a.inferType(env) }
         targetMethod.checkArguments(argumentTypes) // Check arguments are subtype or throw error.
@@ -403,8 +401,12 @@ class DotRequestNode(rec, meth, args, generics) {
     // Checks the method is in the receiver and returns the return type of it.
     method inferType(env) {
         def receiverType = receiver.inferType(env)
+        // If it is an imported type, it is unknown whether the method exists or what it returns.
+        if ((receiverType.name == "Import") || (receiverType.name == "Unknown")) then {
+            return unknownType
+        }
         def argumentTypes = arguments.map { a -> 
-            a.inferType(env) 
+            a.inferType(env)
         }
 
         // Directly check the receiver type has this method.
@@ -479,7 +481,7 @@ class CommentNode(txt) {
 
     // Since all method/block body lists remove comments to not interfere with return types, throw error if not removed.
     method inferType(env) { TypeError.raise "Cannot infer comment type" }
-    method checkType(env, _) { inferType(env) }
+    method checkType(env, _) { TypeError.raise "Cannot check comment type" }
 }
 
 
@@ -614,7 +616,7 @@ class MethodSignatureNode(parts, rType) {
     method asMethod(env) {
         // Lexically finds the return type literal.
         def returnType = env.findType(lexicalReturnType)
-        // CheckType already enforces all params are IdentifierNodes. Lexically finds the param types.
+        // Interface already enforces all params are IdentifierNodes. Lexically finds the param types.
         def paramTypes = parameters.map { param -> env.findType(param.declaredType) }
         // Add NewMethod object to environment.
         return NewMethod(declaredName, paramTypes, returnType)
@@ -777,7 +779,7 @@ class ImportNode(src, bind) {
 
     method checkType(env, expected) {
         // Check doneType matching expected.
-        def actial = inferType(env)
+        def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
             TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
@@ -905,7 +907,9 @@ class BaseEnvironment {
     def baseTypes = collections.dictionary ["Unknown" :: unknownType, "Done" :: doneType, 
                         "Boolean" :: booleanType, "Number" :: numberType, "String" :: stringType]
     def standardMethods = collections.dictionary ["print(1)" :: NewMethod("print(1)", o1N(unknownType), doneType),
-                    "false(0)" :: arglessMeth("false(0)", booleanType), "true(0)" :: arglessMeth("true(0)", booleanType),
+                    "false(0)" :: arglessMeth("false(0)", booleanType), 
+                    "true(0)" :: arglessMeth("true(0)", booleanType),
+                    "for(1)do(1)" :: NewMethod("for(1)do(1)", c2N(unknownType, unknownType), doneType), 
                     "if(1)then(1)" :: createIfElse(0, false),
                     "if(1)then(1)else(1)" :: createIfElse(0, true),
                     "if(1)then(1)elseif(1)then(1)" :: createIfElse(1, false),
@@ -913,6 +917,7 @@ class BaseEnvironment {
                     "if(1)then(1)elseif(1)then(1)elseif(1)then(1)" :: createIfElse(2, false),
                     "if(1)then(1)elseif(1)then(1)elseif(1)then(1)else(1)" :: createIfElse(2, true)] 
     // TODO could make generic function if method name starts with "if(1)then(1)" then it looks for 0+ "elseif(1)then(1)"* and optional "else(1)" at end.
+    // TODO "for(1)do(1)" Takes a lineup and block. Perhaps those could be specific.
                     
     // Helper to make standard library if/elseif/else cases.
     method createIfElse(elseifCount : Number, hasElse : Boolean) is private {
@@ -936,7 +941,7 @@ class BaseEnvironment {
     }
 
     method findMethod(name) {
-        // Lookup standard library methods. TODO ifelse and else, loops.
+        // Lookup standard library methods.
         if (standardMethods.containsKey(name)) then {
             return standardMethods.at(name)
         }
@@ -1268,6 +1273,17 @@ assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(
 
 // Test 55
 assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),c0N(v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil))),c0N(t0D("X",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil)))),nil)),nil)))),c0N(t0D("Y",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),nil)))),c0N(t0D("Z",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),nil)))),c0N(t0D("X2",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil)))),nil)),o1N(d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil)))))),c2N(t0D("Y",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("A(0)",nil,nil)))))),t0D("Z",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))))))))))))))),nil))
+
+
+// Test 56
+// import "test" as test
+// test.y.z
+assertPasses(o0C(c2N(i0M("test",i0D("test",nil)),d0R(d0R(l0R("test(0)",nil,nil),"y(0)",nil,nil),"z(0)",nil,nil)),nil))
+
+// Test 57
+// import "test" as test
+// def x : String = test.x(1).y(1) z("a", "b")
+assertPasses(o0C(c2N(i0M("test",i0D("test",nil)),d3F("x",o1N(l0R("String(0)",nil,nil)),nil,d0R(d0R(l0R("test(0)",nil,nil),"x(1)",o1N(n0M(1)),nil),"y(1)z(2)",c0N(n0M(1),c2N(s0L("a"),s0L("b"))),nil))),nil))
 
 // Test ? put after lineups.
 // def x = { a -> a + 1 }
