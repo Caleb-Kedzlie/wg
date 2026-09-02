@@ -5,9 +5,24 @@ import "collections" as collections
 def TypeError = Exception.refine "TypeError"
 def FailedError = Exception.refine "FailedError"
 
+// All the nodes that can throw errors in checkType use different errors deriving from typeerror for specific tests.
 def MethodError = TypeError.refine "MethodError"
 def ObjectError = TypeError.refine "ObjectError"
-// TODO error type for all if not most nodes and then make tests check for more specific errors to ensure correct cause.
+def LiteralError = TypeError.refine "LiteralError"
+def DefError = TypeError.refine "DefError"
+def VarError = TypeError.refine "VarError"
+def LexicalReqError = TypeError.refine "LexicalReqError"
+def DotReqError = TypeError.refine "DotReqError"
+def ObjectError = TypeError.refine "ObjectError"
+def ReturnError = TypeError.refine "ReturnError"
+def CommentError = TypeError.refine "CommentError"
+def StringError = TypeError.refine "StringError"
+def MethodError = TypeError.refine "MethodError"
+def BlockError = TypeError.refine "BlockError"
+def InterfaceError = TypeError.refine "InterfaceError"
+def LineupError = TypeError.refine "LineupError"
+def ImportError = TypeError.refine "ImportError"
+def TypeDeclError = TypeError.refine "TypeDeclError"
 
 
 //
@@ -76,10 +91,17 @@ method d3F(name, dType, anns, value) { DefNode(name, dType, anns, value) }
 method v4R(name, dType, anns, value) { VarNode(name, dType, anns, value) }
 
 // Reassignment of a variable (defined by var). Uses lexical or dot request. No class needed.
-method a5N(lhs, rhs) { 
-    //TODO
-    unknownType 
-} 
+method a5N(lhs, rhs) { // TODO make tests for this.
+    if (lhs.name == "lexical request") then {
+        def methName = lhs.cleanName ++ ":=(1)"
+        return LexicalRequestNode(methName, o1N(rhs), nil)
+    } elseif (lhs.name == "dot request") then {
+        def methName = lhs.cleanName ++ ":=(1)"
+        return DotRequestNode(lhs.receiver, methName, o1N(rhs), nil)
+    } else {
+        VarError.raise "Invalid left side of variable assignment: '{lhs.name}'"
+    }
+}
 
 // Type and interface declaration, e.g. type A = interface {}
 method t0D(name, genericParams, value) { TypeNode(name, genericParams, value) } 
@@ -364,6 +386,7 @@ class VarNode(nm, decType, annotations, val) { // TODO annotations.
 class LexicalRequestNode(meth, args, generics) {
     def name is public = "lexical request"
     def methodName is public = meth
+    def cleanName is public = meth.substringFrom(1)to(methodName.size - 3) // No arguments e.g. "foo(1)" -> "foo".
     def arguments is public = args
     def genericParams is public = generics // Unused currently.
 
@@ -395,6 +418,7 @@ class DotRequestNode(rec, meth, args, generics) {
     def name is public = "dot request"
     def receiver is public = rec
     def methodName is public = meth
+    def cleanName is public = meth.substringFrom(1)to(methodName.size - 3) // No arguments e.g. "x.foo(1)" -> "x.foo".
     def arguments is public = args
     def genericParams is public = generics // Unused currently.
 
@@ -792,7 +816,7 @@ class ImportNode(src, bind) {
     }
 
     method addToEnvironment(env) {
-        def meth = NewMethod(declaredName ++ "(0)", nil, importType) // TODO make dot requests on import type always succeed because the imported methods are unknown.
+        def meth = NewMethod(declaredName ++ "(0)", nil, importType)
         env.addMethod(meth)
     }
 }
@@ -879,8 +903,7 @@ class Environment(par) {
     method findType(expr) is override {
         // Lexical request for types, BaseEnvironment has the default types such as String, Number and Boolean.
         if (expr.name == "lexical request") then {
-            def methodName = expr.methodName
-            def name = methodName.substringFrom(1)to(methodName.size - 3)
+            def name =  expr.cleanName
             
             // Search through declared types.
             if (types.containsKey(name)) then {
@@ -918,7 +941,8 @@ class BaseEnvironment {
                     "if(1)then(1)elseif(1)then(1)elseif(1)then(1)else(1)" :: createIfElse(2, true)] 
     // TODO could make generic function if method name starts with "if(1)then(1)" then it looks for 0+ "elseif(1)then(1)"* and optional "else(1)" at end.
     // TODO "for(1)do(1)" Takes a lineup and block. Perhaps those could be specific.
-                    
+    // TODO A block needs to have an apply method. It could be unknown for now, or eventually setup generics and structural typing to work with it.
+
     // Helper to make standard library if/elseif/else cases.
     method createIfElse(elseifCount : Number, hasElse : Boolean) is private {
         var name := "if(1)then(1)"
@@ -959,11 +983,9 @@ class BaseEnvironment {
     // Find a literal type object via the name.
     method findType(expr) {
         var name := expr.name
-        // Handle lexical requests.
+        // Handle lexical requests, extracting method name without parameter counts e.g. "foo" not "foo(0)"
         if (name == "lexical request") then {
-            // Extract method name without parameter counts e.g. "String" not "String(0)"
-            def methName = expr.methodName
-            name := methName.substringFrom(1)to(methName.size - 3)
+            name := expr.cleanName
         }
         // Gets literal for static types (Unknown, Done, Boolean, Number, String).
         if (baseTypes.containsKey(name)) then {
@@ -1274,16 +1296,27 @@ assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(
 // Test 55
 assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),c0N(v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil))),c0N(t0D("X",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil)))),nil)),nil)))),c0N(t0D("Y",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),nil)))),c0N(t0D("Z",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),nil)))),c0N(t0D("X2",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil)))),nil)),o1N(d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil)))))),c2N(t0D("Y",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("A(0)",nil,nil)))))),t0D("Z",nil,i0C(o1N(m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))))))))))))))),nil))
 
-
 // Test 56
+// type A = interface {}
+// type B = A
+// var x : A := 1
+// var y : B := x
+assertPasses(o0C(c0N(t0D("A",nil,i0C(nil)),c0N(t0D("B",nil,l0R("A(0)",nil,nil)),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,o1N(n0M(1))),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
+
+// Test 57
 // import "test" as test
 // test.y.z
 assertPasses(o0C(c2N(i0M("test",i0D("test",nil)),d0R(d0R(l0R("test(0)",nil,nil),"y(0)",nil,nil),"z(0)",nil,nil)),nil))
 
-// Test 57
+// Test 58
 // import "test" as test
 // def x : String = test.x(1).y(1) z("a", "b")
 assertPasses(o0C(c2N(i0M("test",i0D("test",nil)),d3F("x",o1N(l0R("String(0)",nil,nil)),nil,d0R(d0R(l0R("test(0)",nil,nil),"x(1)",o1N(n0M(1)),nil),"y(1)z(2)",c0N(n0M(1),c2N(s0L("a"),s0L("b"))),nil))),nil))
+
+// Test 59
+// var x : Done := print(1)
+assertPasses(o0C(o1N(v4R("x",o1N(l0R("Done(0)",nil,nil)),nil,o1N(l0R("print(1)",o1N(n0M(1)),nil)))),nil))
+
 
 // Test ? put after lineups.
 // def x = { a -> a + 1 }
