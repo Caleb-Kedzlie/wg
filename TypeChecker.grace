@@ -13,16 +13,15 @@ def DefError = TypeError.refine "DefError"
 def VarError = TypeError.refine "VarError"
 def LexicalReqError = TypeError.refine "LexicalReqError"
 def DotReqError = TypeError.refine "DotReqError"
-def ObjectError = TypeError.refine "ObjectError"
 def ReturnError = TypeError.refine "ReturnError"
-def CommentError = TypeError.refine "CommentError"
 def StringError = TypeError.refine "StringError"
-def MethodError = TypeError.refine "MethodError"
 def BlockError = TypeError.refine "BlockError"
 def InterfaceError = TypeError.refine "InterfaceError"
 def LineupError = TypeError.refine "LineupError"
 def ImportError = TypeError.refine "ImportError"
 def TypeDeclError = TypeError.refine "TypeDeclError"
+def EnvError = TypeError.refine "EnvError"
+
 
 
 //
@@ -77,7 +76,7 @@ method i0S(prefix, expr, suffix) { InterpolatedStringNode(prefix, expr, suffix) 
 method s4F(prefix, expr, suffix) {
     // Check if it is a special character.
     if (!specialChars.contains { char -> char == expr }) then { 
-        TypeError.raise "'{expr}' is not a special character expression in the safe String" 
+        StringError.raise "'{expr}' is not a special character expression in the safe String" 
     }
     // Prefix is normal string, expr is special character as string, suffix is string (or s4F returning string).
     return prefix ++ expr ++ suffix
@@ -94,7 +93,8 @@ method v4R(name, dType, anns, value) { VarNode(name, dType, anns, value) }
 method a5N(lhs, rhs) { // TODO make tests for this.
     if (lhs.name == "lexical request") then {
         def methName = lhs.cleanName ++ ":=(1)"
-        return LexicalRequestNode(methName, o1N(rhs), nil)
+        // If rhs does not match the old type of the variable this fails to typecheck in LexicalRequestNode.
+        return LexicalRequestNode(methName, o1N(rhs), nil) 
     } elseif (lhs.name == "dot request") then {
         def methName = lhs.cleanName ++ ":=(1)"
         return DotRequestNode(lhs.receiver, methName, o1N(rhs), nil)
@@ -178,7 +178,7 @@ class NewMethod(nm, params, rType) {
     method checkArguments(args) {
         def argNames = "{ args.map { a -> a.name }.join(", ") }"
         if (!argumentsSubtype(args)) then {
-            TypeError.raise "The method arguments for '{fullName}' must be [{paramNames}] not [{argNames}]"
+            MethodError.raise "The method arguments for '{fullName}' must be [{paramNames}] not [{argNames}]"
         }
     }
 
@@ -247,11 +247,9 @@ class AnyType(nm) {
             def subtypeMeth = subtype.getMethod(meth.name)
             // Compare the method params with the subtype.
             if (!meth.argumentsSubtype(subtypeMeth.parameters)) then {
-                // print "{meth.name} invalid arguments ({subtypeMeth.parameters.join(", ")})"
                 return false
             }
             if (!meth.returnType.acceptsSubtype(subtypeMeth.returnType)) then {
-                // print "Invalid returnType {meth.name}!"
                 return false
             }
         }
@@ -302,7 +300,7 @@ class LiteralNode(nm, v, lit) {
     method checkType(env, expected) { // Expected and Actual are AnyType literals.
         def actual = self.inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual type '{actual}' is not a subtype of expected '{expected}' for {name}" 
+            LiteralError.raise "Actual type '{actual}' is not a subtype of expected '{expected}' for {name}" 
         }
     }
 }
@@ -320,21 +318,21 @@ class DefNode(nm, decType, annotations, val) { // TODO annotations.
     }
 
     method checkType(env, expected) {
-        // Def needs initial value, so if it is nil (uses unknownType), raise TypeError.
+        // Def needs initial value, so if it is nil (uses unknownType), raise error.
         if (value.name == "Unknown") then {
-            TypeError.raise "{name} needs initial value"
+            DefError.raise "{name} needs initial value"
         }
         // Find and compare value with declared type.
         def expectedType = env.findType(declaredType)
         def valueType = value.inferType(env)
         if (!expectedType.acceptsSubtype(valueType)) then {
-            TypeError.raise "For {name} '{declaredName}' inferred value '{valueType.name}' is not a subtype of '{expectedType.name}'"
+            DefError.raise "For {name} '{declaredName}' inferred value '{valueType}' is not a subtype of '{expectedType}'"
         }
         
         // Check expected is doneType.
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "{name} invalid, expected type '{expected.name}', actual '{actual.name}'"
+            DefError.raise "{name} invalid, expected type '{expected}', actual '{actual}'"
         }
     }
 
@@ -364,12 +362,12 @@ class VarNode(nm, decType, annotations, val) { // TODO annotations.
         def expectedType = env.findType(declaredType)
         def valueType = value.inferType(env)
         if (!expectedType.acceptsSubtype(valueType)) then {
-            TypeError.raise "The var declaration '{declaredName}' inferred value '{valueType.name}' is not a subtype of '{expectedType.name}'"
+            VarError.raise "The var declaration '{declaredName}' inferred value '{valueType}' is not a subtype of '{expectedType}'"
         }
 
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Var declarion invalid, expected '{expected.name}', Actual type '{actual.name}'"
+            VarError.raise "Var declarion invalid, expected '{expected}', Actual type '{actual}'"
         }
     }
 
@@ -406,7 +404,7 @@ class LexicalRequestNode(meth, args, generics) {
     method checkType(env, expected) {
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Lexical request '{methodName}' inferred '{actual.name}' is not a subtype of '{expected.name}'"
+            LexicalReqError.raise "Lexical request '{methodName}' inferred '{actual}' is not a subtype of '{expected}'"
         }
     }
 
@@ -416,7 +414,7 @@ class LexicalRequestNode(meth, args, generics) {
 }
 
 
-// Searches for a dotted method (e.g. 3.asString) in this environment and outer environments (until found or error thrown).
+// Searches for a dotted method (e.g. 3.asString or x.y) by finding the reciever in this environment or search outer environments (until found or throw error).
 class DotRequestNode(rec, meth, args, generics) {
     def name is public = "dot request"
     def receiver is public = rec
@@ -438,7 +436,7 @@ class DotRequestNode(rec, meth, args, generics) {
 
         // Directly check the receiver type has this method.
         if (!receiverType.hasMethod(methodName)) then {
-            TypeError.raise "No method called '{methodName}' on {receiverType}"
+            DotReqError.raise "No method called '{methodName}' on {receiverType}"
         }
         // Check the argument types match the method parameter types.
         def targetMethod = receiverType.getMethod(methodName)
@@ -450,7 +448,7 @@ class DotRequestNode(rec, meth, args, generics) {
     method checkType(env, expected) {
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Dot request {receiver.name}.{methodName} expected '{expected.name}', but actually returned '{actual.name}'"
+            DotReqError.raise "Dot request {receiver.name}.{methodName} expected '{expected}', but actually returned '{actual}'"
         }
     }
 
@@ -494,7 +492,7 @@ class ObjectNode(bdy, anns) {
     method checkType(env, expected) {
         def envType = inferType(env) 
         if (!expected.acceptsSubtype(envType)) then {
-            TypeError.raise "ObjectNode is not valid"
+            ObjectError.raise "ObjectNode is not valid"
         }
     }
 }
@@ -526,7 +524,7 @@ class ReturnNode(val) {
         def expected = env.getReturnType // Recursive lookup.
         def valueType = inferType(env)
         if (!expected.acceptsSubtype(valueType)) then {
-            TypeError.raise "Return statement value type '{valueType.name}' is not a subtype of expected type '{expected.name}'"
+            ReturnError.raise "Return statement value type '{valueType}' is not a subtype of expected type '{expected}'"
         }
     }
 }
@@ -551,7 +549,7 @@ class InterpolatedStringNode(pre, expr, suff) {
         // This node should always be a stringType.
         def actual = self.inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
+            StringError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
     }
 }
@@ -579,7 +577,9 @@ class MethodNode(parts, rType, anns, bdy) {
 
         // Add the method parameter getters to this environment
         parameters.do { param ->
-            if (param.name != "parameter identifier") then { TypeError.raise "Invalid case of method parameter not wrapped by identifier" }
+            if (param.name != "parameter identifier") then {
+                MethodError.raise "Invalid case of method parameter not wrapped by identifier" 
+            }
             def paramType = env.findType(param.declaredType) // unknownType handled in findType.
             deeperEnv.addMethod(arglessMeth(param.declaredName ++ "(0)", paramType))
         }
@@ -589,25 +589,21 @@ class MethodNode(parts, rType, anns, bdy) {
         // Copy the body to exclude the final expression for ensuring no early return statements.
         def bodyCopy = collections.list(body)
         def finalExpr = if (body.size == 0) then { unknownType } else { bodyCopy.removeAt(bodyCopy.size) }
+        finalExpr.checkType(deeperEnv, unknownType)
         bodyCopy.do { expr ->
             // Propagate typechecks down the expression children. Also finds nested return statements.
             expr.checkType(deeperEnv, unknownType) 
 
             // Throw error if 'return' statement before final expression without being inside a block. 
-            // TODO could extend to flag unreachable for unconditional blocks with returns.
+            // Could extend to detect unconditional blocks with returns, but unnecessary.
             if (expr.name == "return statement") then { 
-                TypeError.raise "Unreachable code in method body after return" 
+                ReturnError.raise "Unreachable code in method body after return" 
             }
         }
         // Check the last body expression (regardless of explicit return) against the environment return type.
         def finalType = finalExpr.inferType(deeperEnv)
         if (!returnType.acceptsSubtype(finalType)) then {
-            TypeError.raise "Method expected return type '{returnType}', actually got '{finalType}' as final expression"
-        }
-
-        
-        body.do { expr -> 
-            
+            ReturnError.raise "Method expected return type '{returnType}', actually got '{finalType}' as final expression"
         }
 
         return doneType 
@@ -617,7 +613,7 @@ class MethodNode(parts, rType, anns, bdy) {
         // Check expected is doneType.
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Method expected result '{expected.name}', actually got '{actual.name}'"
+            MethodError.raise "Method expected result '{expected}', actually got '{actual}'"
         }
     }
 
@@ -682,7 +678,9 @@ class BlockNode(params, bdy) {
 
         // Add the parameter getters to this environment and gets their types.
         def paramTypes = parameters.map { param ->
-            if (param.name != "parameter identifier") then { TypeError.raise "Invalid case of block parameter not wrapped by identifier" }
+            if (param.name != "parameter identifier") then { 
+                BlockError.raise "Invalid case of block parameter not wrapped by identifier" 
+            }
             def paramType = env.findType(param.declaredType) // unknownType handled in findType.
             deeperEnv.addMethod(arglessMeth(param.declaredName ++ "(0)", paramType))
             paramType
@@ -705,13 +703,13 @@ class BlockNode(params, bdy) {
     method checkType(env, expected) {
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}"
+            BlockError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}"
         }
     }
 }
 
 
-// Type declaration for a new
+// Type declaration for a new type (used like String/Number/Boolean) that can be found in the current environment (or children of it).
 class TypeNode(nm, generics, val) {
     def name is public = "type declaration"
     def declaredName is public = nm
@@ -723,15 +721,15 @@ class TypeNode(nm, generics, val) {
     }
 
     method checkType(env, expected) {
-        // Type declarations need initial value, so if it is nil (uses unknownType), raise TypeError.
+        // Type declarations need initial value, so if it is nil (uses unknownType), raise error.
         if (value.name == "Unknown") then {
-            TypeError.raise "{name} needs initial value"
+            TypeDeclError.raise "{name} needs initial value"
         }
         value.checkType(env, unknownType) // Typecheck the value (typically an interface).
 
         def actual = self.inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
+            TypeDeclError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
     }
 
@@ -755,14 +753,14 @@ class InterfaceNode(bdy) {
     method checkType(env, expected) {
         // Ensure the interface body only has method signatures.
         body.do { expr ->
-            if (exprType.name != "method signature") then {
-                TypeError.raise "Only method signautures can be in an interface body, not '{exprType.name}'"
+            if (expr.name != "method signature") then {
+                InterfaceError.raise "Only method signatures can be in an interface body, not '{expr.name}'"
             }
         }
         // Check it still expects doneType.
         def actual = self.inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
+            InterfaceError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
     }
 
@@ -792,6 +790,7 @@ class LineupNode(elems) {
 
     method checkType(env, expected) {
         // TODO
+        // LineupError.raise ""
     }
 }
 
@@ -810,13 +809,13 @@ class ImportNode(src, bind) {
         // Check doneType matching expected.
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
+            ImportError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
 
         // TODO Is it likely possible to minimally typecheck the declaredType.
         //def decType = env.findType(declaredType)
         //if (!expected.acceptsSubtype(decType)) then {
-        //    TypeError.raise "Declared type '{decType.name}' is not a subtype of '{expected.name}'"
+        //    ImportError.raise "Declared type '{decType}' is not a subtype of '{expected}'"
         //}
     }
 
@@ -838,7 +837,7 @@ class DialectNode(src) {
     method checkType(env, expected) {
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
-            TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}"
+            ImportError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}"
         }
     }
 }
@@ -859,7 +858,7 @@ class Environment(par) {
     method addMethod(meth) is override {
         // Throws error if same method in the same environment. May miss some invalid cases between environments but allows shadowing.
         if (methods.contains { m -> m.fullName == meth.fullName }) then { 
-            MethodError.raise "Method that already exists in current scope: '{meth.asString}'"
+            EnvError.raise "Method that already exists in current scope: '{meth}'"
         }
         methods.add(meth) at(1)
     }
@@ -903,7 +902,7 @@ class Environment(par) {
     method addType(nm, val) {
         // TODO could recursively lookup types. And check matching method names for conflicts as well.
         if (types.containsKey(nm)) then {
-            TypeError.raise "Same name {nm} used for a type declaration already"
+            EnvError.raise "Same name {nm} used for a type declaration already"
         }
         types.at(nm) put(val)
     }
@@ -969,7 +968,7 @@ class BaseEnvironment {
     }
 
     method addMethod(meth) {
-        TypeError.raise "Cannot add '{meth.name}' to base environment"
+        EnvError.raise "Cannot add method '{meth.name}' to base environment"
     }
 
     method findMethod(name) {
@@ -977,15 +976,15 @@ class BaseEnvironment {
         if (standardMethods.containsKey(name)) then {
             return standardMethods.at(name)
         }
-        TypeError.raise "No method called '{name}' in scope"
+        EnvError.raise "No method called '{name}' in scope"
     }
 
     method getReturnType {
-        TypeError.raise "Invalid return statement as there is no enclosing method"
+        EnvError.raise "Invalid return statement as there is no enclosing method"
     }
 
     method getDeclaredName {
-        TypeError.raise "Invalid declared name as there is no enclosing method"
+        EnvError.raise "Invalid declared name as there is no enclosing method"
     }
 
     // Find a literal type object via the name.
@@ -999,12 +998,7 @@ class BaseEnvironment {
         if (baseTypes.containsKey(name)) then {
             return baseTypes.at(name)
         }
-        // Boolean literals are lexically resolved (true -> "boolean value"). TODO ensure this is no longer necessary because of 'findMethod'.
-        //if (name == "boolean value") then {
-        //    print("Boolean value")
-        //    return booleanType
-        //}
-        TypeError.raise "Unexpected type: {name}"
+        EnvError.raise "Unexpected type in environment: '{name}'"
     }
 }
 
@@ -1054,7 +1048,6 @@ method assertPasses(ast) {
     testNumber := testNumber + 1
 }
 
-
 // Eventually I will make it parse files directly for the tests. Add new tests to the end to not mess up test number order.
 
 // TEST 1
@@ -1075,11 +1068,11 @@ assertPasses(o0C(o1N(d0R(l0R("false(0)",nil,nil),"prefix!(0)",nil,nil)),nil))
 
 // TEST 5
 // 3 + "hi"
-assertFails(o0C(o1N(d0R(n0M(3),"+(1)",o1N(s0L("hi")),nil)),nil))
+assertFails(o0C(o1N(d0R(n0M(3),"+(1)",o1N(s0L("hi")),nil)),nil), MethodError)
 
 // TEST 6
 // "hi" ++ 3
-assertFails(o0C(o1N(d0R(s0L("hi"),"++(1)",o1N(n0M(3)),nil)),nil))
+assertFails(o0C(o1N(d0R(s0L("hi"),"++(1)",o1N(n0M(3)),nil)),nil), MethodError)
 
 // TEST 7
 // 3 + 11
@@ -1088,37 +1081,36 @@ assertPasses(o0C(o1N(d0R(n0M(3),"+(1)",o1N(n0M(11)),nil)),nil))
 // TEST 8
 // var x := 3
 // var y : String := x
-assertFails(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))),nil))
+assertFails(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))),nil), VarError)
 
 // TEST 9
 // var x : Boolean := true
 // var y : String := x
-assertFails(o0C(c2N(v4R("x",o1N(l0R("Boolean(0)",nil,nil)),nil,o1N(l0R("true(0)",nil,nil))),v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))),nil))
+assertFails(o0C(c2N(v4R("x",o1N(l0R("Boolean(0)",nil,nil)),nil,o1N(l0R("true(0)",nil,nil))),v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))),nil), VarError)
 
 // TEST 10
 // var y : String := 3
-assertFails(o0C(o1N(v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(n0M(3)))),nil))
+assertFails(o0C(o1N(v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(n0M(3)))),nil), VarError)
 
 // Undefined variable and method.
 
 // TEST 11
 // a
-assertFails(o0C(o1N(l0R("a(0)",nil,nil)),nil))
+assertFails(o0C(o1N(l0R("a(0)",nil,nil)),nil), EnvError)
 
 // TEST 12
 // a.b
-assertFails(o0C(o1N(d0R(l0R("a(0)",nil,nil),"b(0)",nil,nil)),nil))
+assertFails(o0C(o1N(d0R(l0R("a(0)",nil,nil),"b(0)",nil,nil)),nil), EnvError)
 
-// TODO finish custom types so these tests gives the correct error message.
 // TEST 13
 // def x = 3
 // x.test
-assertFails(o0C(c2N(d3F("x",nil,nil,n0M(3)),d0R(l0R("x(0)",nil,nil),"test(0)",nil,nil)),nil))
+assertFails(o0C(c2N(d3F("x",nil,nil,n0M(3)),d0R(l0R("x(0)",nil,nil),"test(0)",nil,nil)),nil), DotReqError)
 
 // TEST 14
 // def x = 3
 // 1 + x.test(1)
-assertFails(o0C(c2N(d3F("x",nil,nil,n0M(3)),d0R(n0M(1),"+(1)",o1N(d0R(l0R("x(0)",nil,nil),"test(1)",o1N(n0M(1)),nil)),nil)),nil))
+assertFails(o0C(c2N(d3F("x",nil,nil,n0M(3)),d0R(n0M(1),"+(1)",o1N(d0R(l0R("x(0)",nil,nil),"test(1)",o1N(n0M(1)),nil)),nil)),nil), DotReqError)
 
 // TEST 15
 // var x : String := "test"
@@ -1138,11 +1130,11 @@ assertPasses(o0C(o1N(l0R("print(1)",o1N(n0M(3)),nil)),nil))
 
 // TEST 19
 // print(3, 3)
-assertFails(o0C(o1N(l0R("print(2)",c2N(n0M(3),n0M(3)),nil)),nil))
+assertFails(o0C(o1N(l0R("print(2)",c2N(n0M(3),n0M(3)),nil)),nil), EnvError)
 
 // TEST 20
 // print
-assertFails(o0C(o1N(l0R("print(0)",nil,nil)),nil))
+assertFails(o0C(o1N(l0R("print(0)",nil,nil)),nil), EnvError)
 
 // TEST 21
 // var x := 3
@@ -1167,7 +1159,7 @@ assertPasses(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),n0M(4)
 // TEST 25
 // var x := 3
 // x := true
-assertFails(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),l0R("true(0)",nil,nil))),nil))
+assertFails(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),l0R("true(0)",nil,nil))),nil), MethodError)
 
 // TEST 26
 // def x : Boolean = true
@@ -1179,11 +1171,11 @@ assertPasses(o0C(o1N(l0R("if(1)then(1)",c2N(d0R(n0M(3),"==(1)",o1N(n0M(3)),nil),
 
 // TEST 28
 // if ("hi") then {}
-assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(s0L("hi"),b1K(nil,nil)),nil)),nil))
+assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(s0L("hi"),b1K(nil,nil)),nil)),nil), MethodError)
 
 // TEST 29
 // if (7) then {}
-assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(n0M(7),b1K(nil,nil)),nil)),nil))
+assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(n0M(7),b1K(nil,nil)),nil)),nil), MethodError)
 
 // TEST 30
 // if (true) then {}
@@ -1202,8 +1194,6 @@ assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(o1N(i0D("b
 // if (true) then { b : Number -> 1 }
 assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(o1N(i0D("b",o1N(l0R("Number(0)",nil,nil)))),o1N(n0M(1)))),nil)),nil))
 
-// TODO make many more method tests for all edge cases.
-
 // TEST 34
 // method test {}
 assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,nil)),nil))
@@ -1218,11 +1208,11 @@ assertPasses(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil)
 
 // Test 37
 // method test(x : String, y: Number) when(z : Boolean) { x+y+z }
-assertFails(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil),p0T("when",o1N(i0D("z",o1N(l0R("Boolean(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil),"+(1)",o1N(l0R("z(0)",nil,nil)),nil)))),nil))
+assertFails(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil),p0T("when",o1N(i0D("z",o1N(l0R("Boolean(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil),"+(1)",o1N(l0R("z(0)",nil,nil)),nil)))),nil), DotReqError)
 
 // Test 38
 // method test(x : String, y: Number) { x + y }
-assertFails(o0C(o1N(m0D(o1N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil)))),nil))
+assertFails(o0C(o1N(m0D(o1N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil)))),nil), DotReqError)
 
 // Test 39
 // method test(x : String, y: Number) { print(x)
@@ -1239,11 +1229,11 @@ assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),
 
 // Test 42
 // method test -> String { return 4 }
-assertFails(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,o1N(r3T(n0M(4))))),nil))
+assertFails(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,o1N(r3T(n0M(4))))),nil), ReturnError)
 
 // Test 43 (implicit return)
 // method test -> String { 4 }
-assertFails(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,o1N(n0M(4)))),nil))
+assertFails(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,o1N(n0M(4)))),nil), ReturnError)
 
 // Test 44
 // method test -> String { 4
@@ -1271,20 +1261,20 @@ assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil
 
 // Test 49
 // def x : String = {a -> a}
-assertFails(o0C(o1N(d3F("x",o1N(l0R("String(0)",nil,nil)),nil,b1K(o1N(i0D("a",nil)),o1N(l0R("a(0)",nil,nil))))),nil))
+assertFails(o0C(o1N(d3F("x",o1N(l0R("String(0)",nil,nil)),nil,b1K(o1N(i0D("a",nil)),o1N(l0R("a(0)",nil,nil))))),nil), DefError)
 
 // Test 50
 // def x = {a -> a} 
 // def y : String = x
-assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("a(0)",nil,nil)))),d3F("y",o1N(l0R("String(0)",nil,nil)),nil,l0R("x(0)",nil,nil))),nil))
+assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("a(0)",nil,nil)))),d3F("y",o1N(l0R("String(0)",nil,nil)),nil,l0R("x(0)",nil,nil))),nil), DefError)
 
 // Test 51
 // def x = {a : Number -> a + "Test"}
-assertFails(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)))),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(s0L("Test")),nil))))),nil))
+assertFails(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)))),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(s0L("Test")),nil))))),nil), MethodError)
 
 // Test 52
 // def x = {a : Number -> a ++ "Test"}
-assertFails(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)))),o1N(d0R(l0R("a(0)",nil,nil),"++(1)",o1N(s0L("Test")),nil))))),nil))
+assertFails(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)))),o1N(d0R(l0R("a(0)",nil,nil),"++(1)",o1N(s0L("Test")),nil))))),nil), DotReqError)
 
 // Test 53
 //type A = interface {}
@@ -1327,6 +1317,37 @@ assertPasses(o0C(c2N(i0M("test",i0D("test",nil)),d3F("x",o1N(l0R("String(0)",nil
 // Test 59
 // var x : Done := print(1)
 assertPasses(o0C(o1N(v4R("x",o1N(l0R("Done(0)",nil,nil)),nil,o1N(l0R("print(1)",o1N(n0M(1)),nil)))),nil))
+
+// Test 60
+// var x := 3
+// x := 7
+assertPasses(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),n0M(7))),nil))
+
+// Test 61
+// var x := 3
+// x := "Test"
+assertFails(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),s0L("Test"))),nil), MethodError)
+
+// Test 62
+// var x : String := "Test String"
+// x := 7
+assertFails(o0C(c2N(v4R("x",o1N(l0R("String(0)",nil,nil)),nil,o1N(s0L("Test String"))),a5N(l0R("x(0)",nil,nil),l0R("false(0)",nil,nil))),nil), MethodError)
+
+// Test 63 (Unreachable code)
+// method test { 
+//     return 4
+//     5
+// }
+assertFails(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,c2N(r3T(n0M(4)),n0M(5)))),nil), ReturnError)
+
+// Test 64 (False negative, unreachable code with unconditional block)
+// method test {
+//     if (true) then { return 4 }
+//     5
+// } 
+assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,c2N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(nil,o1N(r3T(n0M(4))))),nil),n0M(5)))),nil))
+
+assertPasses(o0C(c2N(d3F("y",nil,nil,s0L("hi")),d3F("x",o1N(l0R("Number(0)",nil,nil)),nil,d0R(l0R("y(0)",nil,nil),"++(1)",o1N(s0L("bye")),nil))),nil))
 
 
 // Test ? put after lineups.
