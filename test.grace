@@ -1,4 +1,4 @@
-// java -cp wg/java/ nz.mwh.wg.Start TESTING.grace
+// java -cp wg/java/ nz.mwh.wg.Start test.grace
 // EVERYTHING THAT DOESN'T WORK WITH MY CURRENT PARSER HAS BEEN COMMENTED.
 // Source: http://www.cs.pdx.edu/~grace/
 

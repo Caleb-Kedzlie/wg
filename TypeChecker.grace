@@ -70,7 +70,7 @@ method isNil(val) {
 method n0M(v) { LiteralNode("number value", v, numberType) }
 method s0L(v) { LiteralNode("string value", v, stringType) }
 
-// Interpolated string for formatting, e.g. "price is {y} dollars." -> prefix="price is ", expr={y}, and suffix=" dollars."
+// Interpolated string for formatting, e.g. "price is {y} dollars" -> prefix="price is ", expr={y}, and suffix=" dollars"
 method i0S(prefix, expr, suffix) { InterpolatedStringNode(prefix, expr, suffix) }
 
 // SafeStr for formatting special characters with prefix/suffix.
@@ -156,10 +156,8 @@ class NewMethod(nm, params, rType) {
     def name is public = nm
     def parameters is public = params
     def returnType is public = rType
-
-    method asString {
-        return name
-    }
+    def paramNames = "{ parameters.map { p -> p.name }.join(", ") }"
+    def fullName is public = "{name}({paramNames}) -> {returnType.name}"
 
     // Check the sent args subtype the declared methods parameters.
     method argumentsSubtype(args) {
@@ -178,11 +176,14 @@ class NewMethod(nm, params, rType) {
 
     // Reuses argument subtype check but throws error instead of returning false.
     method checkArguments(args) {
-        def paramNames = "({parameters.map { p -> p.name}.join(", ")})"
-        def argNames = "({ args.map { a -> a.name}.join(", ") })"
+        def argNames = "{ args.map { a -> a.name }.join(", ") }"
         if (!argumentsSubtype(args)) then {
-            TypeError.raise "'method {name} ({paramNames} -> {returnType.name})' arguments must be {paramNames} not {argNames}"
+            TypeError.raise "The method arguments for '{fullName}' must be [{paramNames}] not [{argNames}]"
         }
+    }
+
+    method asString {
+        return name
     }
 }
 
@@ -202,11 +203,12 @@ class AnyType(nm) {
     var methods := nil
 
     method setupMethods(meths) {
-        methods := meths
+        // Additional methods.
+        methods := meths 
         // Methods that all basic types have (excluding done).
-        methods.add(NewMethod("==(1)", o1N(unknownType), booleanType))
-        methods.add(NewMethod("!=(1)", o1N(unknownType), booleanType))
-        methods.add(NewMethod("asString(0)", nil, stringType))
+        addMethod(NewMethod("==(1)", o1N(unknownType), booleanType))
+        addMethod(NewMethod("!=(1)", o1N(unknownType), booleanType))
+        addMethod(NewMethod("asString(0)", nil, stringType))
     }
 
     method addMethod(meth) {
@@ -227,7 +229,7 @@ class AnyType(nm) {
 
     // Format name with methods.
     method asString {
-        return "{name} ({methods.join(", ")})"
+        return "{name} ['{methods.join("', '")}']"
     }
 
     // Compare another type with this type to check if matching/subtype.
@@ -282,7 +284,8 @@ def doneType = AnyType("Done")
 numberType.setupMethods(c0N(sameArgMeth("+(1)", numberType), c2N(sameArgMeth("*(1)", numberType), sameArgMeth("..(1)", numberType))))
 stringType.setupMethods(c2N(sameArgMeth("++(1)", stringType), arglessMeth("size(0)", numberType)))
 booleanType.setupMethods(o1N(arglessMeth("prefix!(0)", booleanType)))
-// Special case for imported types as it has unknown methods.
+doneType.addMethod(NewMethod("asString(0)", nil, stringType)) // DoneType only has asString.
+// Special case for imported types as they have unknown methods (always succeeds).
 def importType = AnyType("Import")
 
 
@@ -399,7 +402,7 @@ class LexicalRequestNode(meth, args, generics) {
         return targetMethod.returnType
     }
 
-    // Checking the lexical request searched object type (calculated in inferType).
+    // Checking the lexical request method return type (calculated in inferType).
     method checkType(env, expected) {
         def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
@@ -479,10 +482,9 @@ class ObjectNode(bdy, anns) {
         // The self method of this object.
         deeperEnv.addMethod(NewMethod("self(0)", nil, deeperEnv.asType))
 
+        // Recursively checktype the body elements. The actual type is unknown.
         body.do { expr ->
-            def exprType = expr.inferType(deeperEnv) // TODO Maybe this should be unknown type. Checktype always runs inferType so it is a comparison with itself.
-            expr.checkType(deeperEnv, exprType)
-            // print "Object body Type {bodyType}"
+            expr.checkType(deeperEnv, unknownType)
         }
 
         return deeperEnv.asType
@@ -588,6 +590,9 @@ class MethodNode(parts, rType, anns, bdy) {
         def bodyCopy = collections.list(body)
         def finalExpr = if (body.size == 0) then { unknownType } else { bodyCopy.removeAt(bodyCopy.size) }
         bodyCopy.do { expr ->
+            // Propagate typechecks down the expression children. Also finds nested return statements.
+            expr.checkType(deeperEnv, unknownType) 
+
             // Throw error if 'return' statement before final expression without being inside a block. 
             // TODO could extend to flag unreachable for unconditional blocks with returns.
             if (expr.name == "return statement") then { 
@@ -600,9 +605,9 @@ class MethodNode(parts, rType, anns, bdy) {
             TypeError.raise "Method expected return type '{returnType}', actually got '{finalType}' as final expression"
         }
 
-        // Propagate typechecks down the expression children. Also finds nested return statements.
+        
         body.do { expr -> 
-            expr.checkType(deeperEnv, unknownType) 
+            
         }
 
         return doneType 
@@ -795,7 +800,7 @@ class ImportNode(src, bind) {
     def name is public = "import statement"
     def source is public = src
     def declaredName is public = bind.declaredName
-    def declaredType is public = bind.declaredType // TODO if this is an interface then at least those methods are imported.
+    def declaredType is public = bind.declaredType // TODO if this is an interface then at least those methods are imported (check their params and return type when used).
 
     method inferType(env) {
         return doneType
@@ -808,7 +813,7 @@ class ImportNode(src, bind) {
             TypeError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
 
-        // TODO Is it possible to typecheck the declaredType.
+        // TODO Is it likely possible to minimally typecheck the declaredType.
         //def decType = env.findType(declaredType)
         //if (!expected.acceptsSubtype(decType)) then {
         //    TypeError.raise "Declared type '{decType.name}' is not a subtype of '{expected.name}'"
@@ -852,7 +857,10 @@ class Environment(par) {
 
     // Add a method to the environment at the start of the list to mask outer methods with the same name.
     method addMethod(meth) is override {
-        // TODO possibly handle throwing error if adding the same named method.
+        // Throws error if same method in the same environment. May miss some invalid cases between environments but allows shadowing.
+        if (methods.contains { m -> m.fullName == meth.fullName }) then { 
+            MethodError.raise "Method that already exists in current scope: '{meth.asString}'"
+        }
         methods.add(meth) at(1)
     }
     
@@ -1006,7 +1014,8 @@ class BaseEnvironment {
 //
 
 print("\n-----Tests-----")
-var testNum := 1 // Increments after each test.
+var testNumber := 1 // Increments after each test.
+var succeededTests := 0 // Increments each success to print total.
 
 // Default error is TypeError, but specific errors can be checked to ensure the correct node threw the error.
 method assertFails(ast) {
@@ -1019,28 +1028,30 @@ method assertFails(ast, error) {
         ast.checkType(Environment(BaseEnvironment), unknownType)
         FailedError.raise "No '{error}' thrown"
     } catch { e : error ->
-        print "(F) PASSED: Test{testNum} successfully threw -> '{e}'"
+        print "(AF) PASSED: Test{testNumber} successfully threw -> {e}"
+        succeededTests := succeededTests + 1
     } catch { e : FailedError ->
-        print "(F) -FAILED-: Test{testNum} did not throw any error"
+        print "(AF) -FAILED-: Test{testNumber} did not throw any error"
     } catch { e -> 
         // Caused by coding mistakes or wrong specific error.
-        print "(F) -FAILED CRITICAL-: Test{testNum} threw the wrong error '{e}' instead of '{error}'"
+        print "(AF) -FAILED CRITICAL-: Test{testNumber} threw the wrong error of -> {e} - instead of -> {error}"
     }
-    testNum := testNum + 1
+    testNumber := testNumber + 1
 }
 
 // Tests that succeed only if no TypeError thrown. Specific error types not needed as none should occur.
 method assertPasses(ast) {
     try {
         ast.checkType(Environment(BaseEnvironment), unknownType)
-        print "(P) PASSED: Test{testNum} did not throw 'TypeError'"
+        print "(AP) PASSED: Test{testNumber} did not throw 'TypeError'"
+        succeededTests := succeededTests + 1
     } catch { e : TypeError ->
-        print "(P) -FAILED-: Test{testNum} unexpectedly threw -> '{e}'"
+        print "(AP) -FAILED-: Test{testNumber} unexpectedly threw -> {e}"
     } catch { e -> 
         // Unexpected error caused by coding mistakes.
-        print "(P) -FAILED CRITICAL-: Test{testNum} unexpectedly threw -> '{e}'"
+        print "(AP) -FAILED CRITICAL-: Test{testNumber} unexpectedly threw -> {e}"
     }
-    testNum := testNum + 1
+    testNumber := testNumber + 1
 }
 
 
@@ -1352,4 +1363,9 @@ assertPasses(o0C(o1N(v4R("x",o1N(l0R("Done(0)",nil,nil)),nil,o1N(l0R("print(1)",
 // Complex test in file: sample.grace
 // assertPasses(o0C(c0N(i0M("ast",i0D("ast",nil)),c0N(c0M(" This file makes use of many AST nodes"),c2N(d3F("x",nil,nil,o0C(c2N(v4R("y",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),m0D(c2N(p0T("foo",o1N(i0D("arg",o1N(l0R("Action(0)",nil,nil)))),nil),p0T("bar",o1N(i0D("n",nil)),nil)),o1N(l0R("String(0)",nil,nil)),nil,c2N(a5N(d0R(l0R("self(0)",nil,nil),"y(0)",nil,nil),d0R(d0R(l0R("arg(0)",nil,nil),"apply(0)",nil,nil),"+(1)",o1N(l0R("n(0)",nil,nil)),nil)),r3T(i0S(s4F("y ",c9A," "),l0R("y(0)",nil,nil),s0L(s4F("",c9E,""))))))),nil)),l0R("print(1)",o1N(d0R(l0R("x(0)",nil,nil),"foo(1)bar(1)",c2N(b1K(nil,o1N(n0M(2))),n0M(3)),nil)),nil)))),nil))
 
-// TODO make more complex tests that should pass or fail.
+// TODO make more longer tests.
+
+
+// Print summary
+def totalTests = testNumber - 1
+print "Tests passed: {succeededTests}/{totalTests}"

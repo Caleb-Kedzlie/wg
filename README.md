@@ -1,23 +1,32 @@
-Compile Parser in `wg` directory  
+## Main commands  
+Compile Parser. Stay in `wg` directory for all commands, and use 'LF' line endings for all files.
 ```
+cd wg
 javac -cp java/ java/nz/mwh/wg/Start.java
 ```
 
-Run Grace script (make sure to use 'LF' line endings)  
+Run Grace TypeChecker script 
 ```
 java -cp java/ nz.mwh.wg.Start TypeChecker.grace
 ```
 
-Print longform AST  
+
+Print longform AST (use 'LF' line endings, and replace test.grace with desired script)  
 ```
-java -cp java/ nz.mwh.wg.Start -p TypeChecker.grace
+java -cp java/ nz.mwh.wg.Start -p test.grace
 ```
 
-Print concise AST (first move the script into test.grace in outer directory)  
+Print concise AST (first move the script contents into test.grace in outer `wg` directory)  
 ```
 java -cp java/ nz.mwh.wg.Start wg.grace
 ```
 
-TypeChecker.grace is the main file, it imports collections.grace.  
+## Info  
+TypeChecker.grace is the main file, it imports collections.grace. The TEMPLATE is unused.  
 The script sample.grace is for testing if all AST nodes are implemented but more extensive tests are used.  
-TEMPLATE and TESTING are not run.
+There is some random syntax testing in test.grace that could be deleted.  
+
+## Typechecking any Grace program  
+With the current commands, any program written in the file test.grace can be converted into concise and longform AST.  
+The Typechecker uses concise AST so convert it into that and then copy and paste it into the end of TypeChecker.grace.  
+It can either be standalone `o0C(o1N(n0M(3)),nil).checkType(Environment(BaseEnvironment), unknownType)` or as a test that prints `assertPasses(o0C(o1N(n0M(3)),nil))`.  
