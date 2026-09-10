@@ -26,6 +26,7 @@ def EnvError = TypeError.refine "EnvError"
 
 //
 // #### AST METHODS ####
+// TODO the annotations parameter in many of these nodes are unused. It is an advanced feature and my focus is on completing structural typing and then generics, so it may not be completed.
 //
 
 
@@ -90,7 +91,7 @@ method d3F(name, dType, anns, value) { DefNode(name, dType, anns, value) }
 method v4R(name, dType, anns, value) { VarNode(name, dType, anns, value) }
 
 // Reassignment of a variable (defined by var). Uses lexical or dot request. No class needed.
-method a5N(lhs, rhs) { // TODO make tests for this.
+method a5N(lhs, rhs) {
     if (lhs.name == "lexical request") then {
         def methName = lhs.cleanName ++ ":=(1)"
         // If rhs does not match the old type of the variable this fails to typecheck in LexicalRequestNode.
@@ -134,15 +135,13 @@ method r3T(value) { ReturnNode(value) }
 method c0M(text) { CommentNode(text) }
 
 // Lineup infers each element between square brackets "[1, 2, 3]"
-method l0N(elems) { LineupNode(elems) } // TODO
+method l0N(elems) { LineupNode(elems) }
 
 // Import statement using source string, e.g. import "ast" as ast
 method i0M(source, binding) { ImportNode(source, binding) }
 
 // Dialect Statement that extends the Grace language using source string, e.g. dialect "name"
 method d0S(source) { DialectNode(source) }
-
-
 
 
 //
@@ -307,7 +306,7 @@ class LiteralNode(nm, v, lit) {
 
 
 // Def declarations are immutable. You can get but not assign them.
-class DefNode(nm, decType, annotations, val) { // TODO annotations.
+class DefNode(nm, decType, annotations, val) {
     def name is public = "def declaration"
     def declaredName is public = nm
     def declaredType is public = if (decType.size > 0) then { decType.first } else { unknownType }
@@ -346,7 +345,7 @@ class DefNode(nm, decType, annotations, val) { // TODO annotations.
 }
 
 
-class VarNode(nm, decType, annotations, val) { // TODO annotations.
+class VarNode(nm, decType, annotations, val) {
     def name is public = "var declaration"
     def declaredName is public = nm
     // Nil makes empty lists so declaredType and value become unknownType.
@@ -471,6 +470,7 @@ method addDeclarations(env, body) {
 
 
 class ObjectNode(bdy, anns) {
+    def name is public = "object"
     def body is public = bdy.without { x -> x.name == "comment" }
     def annotations is public = anns
 
@@ -637,7 +637,7 @@ class MethodSignatureNode(parts, rType) {
     def parameters is public = parts.flatMap { part -> part.parameters } // Merges into single list of identifier nodes.
     def lexicalReturnType is public = if (isNil(rType)) then { unknownType } else { rType.first } // unknownType if nil.
 
-    // TODO ensure this works.
+    // TODO ensure this works with tests.
     method asMethod(env) {
         // Lexically finds the return type literal.
         def returnType = env.findType(lexicalReturnType)
@@ -786,6 +786,7 @@ class LineupNode(elems) {
     method inferType(env) {
         return unknownType // TODO
         // Typecheck the declared type against the common element type e.g. def x : List[[String]] = ["hi", "bye"]
+        // So return some lineupType representation that stores String, then var/def can compare to that generic type.
     }
 
     method checkType(env, expected) {
@@ -847,7 +848,7 @@ class DialectNode(src) {
 // The top-most parent of any Environment is BaseEnvironment and is recusively reached when searching for variables/methods to terminate if not found.
 class Environment(par) {
     inherit BaseEnvironment
-    def parent = par
+    def parent is public = par
     var methods := nil // Storing methods and variable getters.
     var types := collections.dictionary [] // For type declaration nodes.
     // These two are used if this environment itself is a method.
@@ -901,6 +902,8 @@ class Environment(par) {
     // Add a type declaration.
     method addType(nm, val) {
         // TODO could recursively lookup types. And check matching method names for conflicts as well.
+        // while loop parent.parent types.containsKey
+
         if (types.containsKey(nm)) then {
             EnvError.raise "Same name {nm} used for a type declaration already"
         }
@@ -946,9 +949,9 @@ class BaseEnvironment {
                     "if(1)then(1)elseif(1)then(1)else(1)" :: createIfElse(1, true),
                     "if(1)then(1)elseif(1)then(1)elseif(1)then(1)" :: createIfElse(2, false),
                     "if(1)then(1)elseif(1)then(1)elseif(1)then(1)else(1)" :: createIfElse(2, true)] 
-    // TODO could make generic function if method name starts with "if(1)then(1)" then it looks for 0+ "elseif(1)then(1)"* and optional "else(1)" at end.
-    // TODO "for(1)do(1)" Takes a lineup and block. Perhaps those could be specific.
-    // TODO A block needs to have an apply method. It could be unknown for now, or eventually setup generics and structural typing to work with it.
+    // TODO - could make generic function if method name starts with "if(1)then(1)" then it looks for 0+ "elseif(1)then(1)"* and optional "else(1)" at end.
+    //      -  "for(1)do(1)" Takes a lineup and block. Perhaps those could be specific.
+    //      -  A block needs to have an apply method. It could be unknown for now, or eventually setup generics and structural typing to work with it.
 
     // Helper to make standard library if/elseif/else cases.
     method createIfElse(elseifCount : Number, hasElse : Boolean) is private {
@@ -1347,7 +1350,15 @@ assertFails(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,c2N(r3T(n0M(4)),n0M(5))
 // } 
 assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,c2N(l0R("if(1)then(1)",c2N(l0R("true(0)",nil,nil),b1K(nil,o1N(r3T(n0M(4))))),nil),n0M(5)))),nil))
 
-assertPasses(o0C(c2N(d3F("y",nil,nil,s0L("hi")),d3F("x",o1N(l0R("Number(0)",nil,nil)),nil,d0R(l0R("y(0)",nil,nil),"++(1)",o1N(s0L("bye")),nil))),nil))
+// Test 65
+// def y = "hi"
+// def x : Number = y ++ "bye"
+assertFails(o0C(c2N(d3F("y",nil,nil,s0L("hi")),d3F("x",o1N(l0R("Number(0)",nil,nil)),nil,d0R(l0R("y(0)",nil,nil),"++(1)",o1N(s0L("bye")),nil))),nil), DefError)
+
+// Test 66 (Should fail because they both make a method with the same name) TODO check other such cases for different method making AST like var, def, interface.
+// def Test = object {}
+// class Test {}
+assertFails(o0C(c2N(d3F("Test",nil,nil,o0C(nil,nil)),m0D(o1N(p0T("Test",nil,nil)),nil,nil,o1N(o0C(nil,nil)))),nil), EnvError)
 
 
 // Test ? put after lineups.
@@ -1373,12 +1384,6 @@ assertPasses(o0C(c2N(d3F("y",nil,nil,s0L("hi")),d3F("x",o1N(l0R("Number(0)",nil,
 // def x = { a -> a + 1 }
 // x.apply(["test", "str"])
 // assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0N(c2N(s0L("test"),s0L("str")))),nil)),nil))
-
-
-// TODO I think this should fail because Test refers to both. Many other edge cases like this with variables or parameters or new types with the same name.
-// def Test = object {}
-// class Test {}
-// assertFails(o0C(c2N(d3F("Test",nil,nil,o0C(nil,nil)),m0D(o1N(p0T("Test",nil,nil)),nil,nil,o1N(o0C(nil,nil)))),nil))
 
 
 // Complex test in file: sample.grace
