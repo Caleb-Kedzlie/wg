@@ -24,9 +24,10 @@ java -cp java/ nz.mwh.wg.Start wg.grace
 ## Info  
 TypeChecker.grace is the main file, it imports collections.grace. The TEMPLATE is unused.  
 The script sample.grace is for testing if all AST nodes are implemented but more extensive tests are used.  
-There is some random syntax testing in test.grace that could be deleted.  
+There is some random testing in test.grace that could be deleted.  
 
 ## Typechecking any Grace program  
 With the current commands, any program written in the file test.grace can be converted into concise and longform AST.  
-The Typechecker uses concise AST so convert it into that and then copy and paste it into the end of TypeChecker.grace.  
+The Typechecker uses concise AST, so convert it into that form and then copy and paste it into the end of TypeChecker.grace.  
+For example with a script consisting of just the constant "3":
 It can either be standalone `o0C(o1N(n0M(3)),nil).checkType(Environment(BaseEnvironment), unknownType)` or as a test that prints `assertPasses(o0C(o1N(n0M(3)),nil))`.  
