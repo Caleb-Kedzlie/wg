@@ -469,10 +469,18 @@ method addDeclarations(env, body) {
 }
 
 
+method checkNestedObject(expr) {
+    if (expr.name == "object") then {
+        expr.outer := false
+    }
+}
+
+// Either a singleton object (def x = object {}), a class (class x {}) or the outer-most scope of the entire program.
 class ObjectNode(bdy, anns) {
     def name is public = "object"
     def body is public = bdy.without { x -> x.name == "comment" }
     def annotations is public = anns
+    var outer is public := true
 
     method inferType(env) {
         def deeperEnv = Environment(env)
@@ -482,6 +490,7 @@ class ObjectNode(bdy, anns) {
 
         // Recursively checktype the body elements. The actual type is unknown.
         body.do { expr ->
+            checkNestedObject(expr)
             expr.checkType(deeperEnv, unknownType)
         }
 
@@ -493,6 +502,12 @@ class ObjectNode(bdy, anns) {
         def envType = inferType(env) 
         if (!expected.acceptsSubtype(envType)) then {
             ObjectError.raise "ObjectNode is not valid"
+        }
+
+        // The outer-most scope of the entire program checks if any remaining unresolved types.
+        def unresolved = env.unresolvedTypes
+        if (outer && (unresolved.size > 0)) then {
+            ObjectError.raise "Some types were never resolved: '{unresolved.join("', '")}'"
         }
     }
 }
@@ -589,8 +604,11 @@ class MethodNode(parts, rType, anns, bdy) {
         // Copy the body to exclude the final expression for ensuring no early return statements.
         def bodyCopy = collections.list(body)
         def finalExpr = if (body.size == 0) then { unknownType } else { bodyCopy.removeAt(bodyCopy.size) }
+        // Still need to typecheck it, even though it is excluded from bodyCopy.
+        checkNestedObject(finalExpr)
         finalExpr.checkType(deeperEnv, unknownType)
         bodyCopy.do { expr ->
+            checkNestedObject(expr)
             // Propagate typechecks down the expression children. Also finds nested return statements.
             expr.checkType(deeperEnv, unknownType) 
 
@@ -672,6 +690,7 @@ class BlockNode(params, bdy) {
         // The block return type is done by default. Updates to the final element.
         var returnType := doneType
         body.do { expr ->
+            checkNestedObject(expr)
             returnType := expr.inferType(deeperEnv)
             expr.checkType(deeperEnv, unknownType) // Propagate typechecks on children.
         }
@@ -745,6 +764,7 @@ class InterfaceNode(bdy) {
         }
     }
 
+    // Convert to AnyType format to allow typechecking by adding to environment in TypeNode.
     method asType(env) {
         def interfaceType = AnyType("Interface")
         body.do { sig ->
@@ -853,6 +873,9 @@ class Environment(par) {
     var returnType := nil
     var declaredName := nil
 
+    // To handle defining interface types (that are potentially coinductive) in any order.
+    def placeholderTypes = collections.dictionary []
+
     // Add a method to the environment at the start of the list to mask outer methods with the same name.
     method addMethod(meth) is override {
         // Throws error if same method in the same environment. May miss some invalid cases between environments but allows shadowing.
@@ -896,6 +919,10 @@ class Environment(par) {
         return parent.getDeclaredName
     }
 
+    // Add a placeholder type initially to handle coinductive relationships.
+    method addPlaceholder(nm, interfaceNode) {
+        placeholderTypes.at(nm) put(interfaceNode)
+    }
 
     // Add a type declaration.
     method addType(nm, val) {
@@ -904,7 +931,6 @@ class Environment(par) {
 
         if (types.containsKey(nm)) then {
             // TODO Have a placeholder type with like a nil body to show that is a placeholder to replace later.
-
             EnvError.raise "Same name {nm} used for a type declaration already"
         }
         types.at(nm) put(val)
@@ -918,6 +944,12 @@ class Environment(par) {
             // Search through declared types.
             if (types.containsKey(name)) then {
                 return types.at(name)
+            }
+
+            
+            if (!unresolvedTypes.contains {nm -> nm == name}) then {
+                //unresolvedTypes.add(name) // TODO at the end of the outer-most ObjectNode, throw error if this is not empty.
+                return unresolvedTypes.at(name)
             }
         }
         return parent.findType(expr)
@@ -950,7 +982,7 @@ class BaseEnvironment {
                     "if(1)then(1)elseif(1)then(1)elseif(1)then(1)" :: createIfElse(2, false),
                     "if(1)then(1)elseif(1)then(1)elseif(1)then(1)else(1)" :: createIfElse(2, true)] 
     // TODO - could make generic function if method name starts with "if(1)then(1)" then it looks for 0+ "elseif(1)then(1)"* and optional "else(1)" at end.
-    //      -  "for(1)do(1)" Takes a lineup and block. Perhaps those could be specific.
+    //      -  "for(1)do(1)" Takes a lineup and block. Perhaps those could be specific types instead of unknownType.
     //      -  A block needs to have an apply method. It could be unknown for now, or eventually setup generics and structural typing to work with it.
 
     // Helper to make standard library if/elseif/else cases.
@@ -993,7 +1025,7 @@ class BaseEnvironment {
     // Find a literal type object via the name.
     method findType(expr) {
         var name := expr.name
-        // Handle lexical requests, extracting method name without parameter counts e.g. "foo" not "foo(0)"
+        // Extracting method name without parameter counts e.g. "foo" not "foo(0)"
         if (name == "lexical request") then {
             name := expr.cleanName
         }
@@ -1031,7 +1063,7 @@ method assertFails(ast, error) {
         print "(AF) -FAILED-: Test{testNumber} did not throw any error"
     } catch { e -> 
         // Caused by coding mistakes or wrong specific error.
-        print "(AF) -FAILED CRITICAL-: Test{testNumber} threw the wrong error of -> {e} - instead of -> {error}"
+        print "(AF) -FAILED CRITICAL-: Test{testNumber} threw the wrong error of -> {e} -:- instead of -> {error}"
     }
     testNumber := testNumber + 1
 }
