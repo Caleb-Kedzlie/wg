@@ -23,7 +23,6 @@ def TypeDeclError = TypeError.refine "TypeDeclError"
 def EnvError = TypeError.refine "EnvError"
 
 
-
 //
 // #### AST METHODS ####
 // TODO the annotations parameter in many of these nodes are unused. It is an advanced feature and my focus is on completing structural typing and then generics, so it may not be completed.
@@ -200,6 +199,7 @@ method arglessMeth(name, rType) {
 class AnyType(nm) {
     var name is public := nm
     var methods := nil
+    var trail := collections.list []
 
     method setupMethods(meths) {
         // Additional methods.
@@ -232,7 +232,7 @@ class AnyType(nm) {
     }
 
     // Compare another type with this type to check if matching/subtype.
-    method acceptsSubtype(subtype) {
+    method acceptsSubtypeBase(subtype) {
         // Unknown always subtypes and the same object subtypes.
         if ((subtype.name == "Unknown") || (self == subtype)) then {
             return true
@@ -255,6 +255,20 @@ class AnyType(nm) {
         // Succeeded method check. Name doesn't have to match.
         return true
     }
+
+    // Compare another type with this type accounting for possible coinductive relationships (interacting infinte dependencies).
+    method acceptsSubtype(subtype) {
+        // Neither are custom types, fallback to base subtype comparison. Recursion lets this get checked at any point.
+        if ((subtype.name != "Interface") && (name != "Interface")) then {
+            return acceptsSubtypeBase(subtype)
+        }
+        // If one is not an interface but the other one is, it is not a coinductive or normal subtype as the structures differ.
+        if (!((subtype.name == "Interface") && (name == "Interface"))) then {
+            return false
+        }
+
+
+    }
 }
 
 
@@ -276,14 +290,14 @@ def unknownType = object {
 def numberType = AnyType("Number")
 def stringType = AnyType("String")
 def booleanType = AnyType("Boolean")
-// Similar to void, def/var use this type when done.
-def doneType = AnyType("Done")
+def doneType = AnyType("Done") // Similar to void, def/var/methods without return/types return this when done.
+def importType = AnyType("Import") // Special case for imported types as they have unknown methods (always succeeds).
+
 numberType.setupMethods(c0N(sameArgMeth("+(1)", numberType), c2N(sameArgMeth("*(1)", numberType), sameArgMeth("..(1)", numberType))))
 stringType.setupMethods(c2N(sameArgMeth("++(1)", stringType), arglessMeth("size(0)", numberType)))
 booleanType.setupMethods(o1N(arglessMeth("prefix!(0)", booleanType)))
-doneType.addMethod(NewMethod("asString(0)", nil, stringType)) // DoneType only has asString.
-// Special case for imported types as they have unknown methods (always succeeds).
-def importType = AnyType("Import")
+doneType.addMethod(NewMethod("asString(0)", nil, stringType)) // DoneType only has asString(0).
+
 
 
 // Node that stores a name and literal value and can compare types via structual subtyping.
@@ -469,12 +483,6 @@ method addDeclarations(env, body) {
 }
 
 
-method checkNestedObject(expr) {
-    if (expr.name == "object") then {
-        expr.outer := false
-    }
-}
-
 // Either a singleton object (def x = object {}), a class (class x {}) or the outer-most scope of the entire program.
 class ObjectNode(bdy, anns) {
     def name is public = "object"
@@ -490,10 +498,8 @@ class ObjectNode(bdy, anns) {
 
         // Recursively checktype the body elements. The actual type is unknown.
         body.do { expr ->
-            checkNestedObject(expr)
             expr.checkType(deeperEnv, unknownType)
         }
-
         return deeperEnv.asType
     }
 
@@ -502,12 +508,6 @@ class ObjectNode(bdy, anns) {
         def envType = inferType(env) 
         if (!expected.acceptsSubtype(envType)) then {
             ObjectError.raise "ObjectNode is not valid"
-        }
-
-        // The outer-most scope of the entire program checks if any remaining unresolved types.
-        def unresolved = env.unresolvedTypes
-        if (outer && (unresolved.size > 0)) then {
-            ObjectError.raise "Some types were never resolved: '{unresolved.join("', '")}'"
         }
     }
 }
@@ -605,10 +605,8 @@ class MethodNode(parts, rType, anns, bdy) {
         def bodyCopy = collections.list(body)
         def finalExpr = if (body.size == 0) then { unknownType } else { bodyCopy.removeAt(bodyCopy.size) }
         // Still need to typecheck it, even though it is excluded from bodyCopy.
-        checkNestedObject(finalExpr)
         finalExpr.checkType(deeperEnv, unknownType)
         bodyCopy.do { expr ->
-            checkNestedObject(expr)
             // Propagate typechecks down the expression children. Also finds nested return statements.
             expr.checkType(deeperEnv, unknownType) 
 
@@ -690,7 +688,6 @@ class BlockNode(params, bdy) {
         // The block return type is done by default. Updates to the final element.
         var returnType := doneType
         body.do { expr ->
-            checkNestedObject(expr)
             returnType := expr.inferType(deeperEnv)
             expr.checkType(deeperEnv, unknownType) // Propagate typechecks on children.
         }
@@ -786,12 +783,10 @@ class MethodSignatureNode(parts, rType) {
 
     // Convert this method signature into a NewMethod object for typechecking interfaces.
     method asMethod(env) {
-        // Lexically finds the return type literal.
-        def returnType = env.findType(lexicalReturnType)
-        // Interface already enforces all params are IdentifierNodes. Lexically finds the param types.
-        def paramTypes = parameters.map { param -> env.findType(param.declaredType) }
+        // Does not resolve lexical requests immediately for return type and parameters.
+        def lexicalParams = parameters.map { param -> env.findType(param.declaredType) }
         // Add NewMethod object to environment.
-        return NewMethod(declaredName, paramTypes, returnType)
+        return NewMethod(declaredName, lexicalParams, lexicalReturnType)
     }
 }
 
@@ -830,15 +825,13 @@ class ImportNode(src, bind) {
         if (!expected.acceptsSubtype(actual)) then {
             ImportError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
-
-        // TODO Is it likely possible to minimally typecheck the declaredType.
-        //def decType = env.findType(declaredType)
-        //if (!expected.acceptsSubtype(decType)) then {
-        //    ImportError.raise "Declared type '{decType}' is not a subtype of '{expected}'"
-        //}
     }
 
     method addToEnvironment(env) {
+        // TODO Is it likely possible to minimally typecheck the declaredType.
+        //def decType = env.findType(declaredType)
+        // For each method in declared type add "declaredName.method"
+
         def meth = NewMethod(declaredName ++ "(0)", nil, importType)
         env.addMethod(meth)
     }
@@ -872,9 +865,6 @@ class Environment(par) {
     // These two are used if this environment itself is a method.
     var returnType := nil
     var declaredName := nil
-
-    // To handle defining interface types (that are potentially coinductive) in any order.
-    def placeholderTypes = collections.dictionary []
 
     // Add a method to the environment at the start of the list to mask outer methods with the same name.
     method addMethod(meth) is override {
@@ -919,11 +909,6 @@ class Environment(par) {
         return parent.getDeclaredName
     }
 
-    // Add a placeholder type initially to handle coinductive relationships.
-    method addPlaceholder(nm, interfaceNode) {
-        placeholderTypes.at(nm) put(interfaceNode)
-    }
-
     // Add a type declaration.
     method addType(nm, val) {
         // TODO could recursively lookup types. And check matching method names for conflicts as well.
@@ -944,12 +929,6 @@ class Environment(par) {
             // Search through declared types.
             if (types.containsKey(name)) then {
                 return types.at(name)
-            }
-
-            
-            if (!unresolvedTypes.contains {nm -> nm == name}) then {
-                //unresolvedTypes.add(name) // TODO at the end of the outer-most ObjectNode, throw error if this is not empty.
-                return unresolvedTypes.at(name)
             }
         }
         return parent.findType(expr)
