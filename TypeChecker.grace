@@ -24,8 +24,7 @@ def EnvError = TypeError.refine "EnvError"
 
 
 //
-// #### AST METHODS ####
-// TODO the annotations parameter in many of these nodes are unused. It is an advanced feature and my focus is on completing structural typing and then generics, so it may not be completed.
+// #### AST METHODS ####  TODO: the annotations parameter in many of these nodes are unused. It is an advanced feature and my focus is on completing structural typing and then generics, so it may not be completed.
 //
 
 
@@ -198,8 +197,9 @@ method arglessMeth(name, rType) {
 // Node for all literal types to be built upon.
 class AnyType(nm) {
     var name is public := nm
+    var typeDeclaredName is public := nil // "A" in "type A = interface {...}".
     var methods := nil
-    var trail := collections.list []
+    var trail := nil
 
     method setupMethods(meths) {
         // Additional methods.
@@ -226,48 +226,95 @@ class AnyType(nm) {
         TypeError.raise "Method {methName} does not exist for {name}"
     }
 
+    method methodsApply(block) {
+        methods.do(block)
+    }
+
     // Format name with methods.
     method asString {
         return "{name} ['{methods.join("', '")}']"
     }
 
-    // Compare another type with this type to check if matching/subtype.
-    method acceptsSubtypeBase(subtype) {
-        // Unknown always subtypes and the same object subtypes.
-        if ((subtype.name == "Unknown") || (self == subtype)) then {
-            return true
+    // If any methods are not subtyped from parent via a certain function then return false.
+    method compareMethods(parent, subtype, block) {
+        var result : Boolean := true
+        parent.methodsApply { meth ->
+            result := result && block.apply(parent, subtype, meth)
         }
+        return result
+    }
 
-        methods.do { meth ->
-            // The subtype should at least have all methods of this type.
-            if (!subtype.hasMethod(meth.name)) then {
-                return false
-            }
-            def subtypeMeth = subtype.getMethod(meth.name)
-            // Compare the method params with the subtype.
-            if (!meth.argumentsSubtype(subtypeMeth.parameters)) then {
-                return false
-            }
-            if (!meth.returnType.acceptsSubtype(subtypeMeth.returnType)) then {
-                return false
-            }
-        }
-        // Succeeded method check. Name doesn't have to match.
-        return true
+    // Handle interfaces not resolving lexical requests for methods.
+    method lazyLexicalRequest(env, expr) {
+        // TODO somehow need to access env here. May need to update all acceptsSubtype to take env. OR resolve the types later with a two pass system for the method signatures.
+        return if (expr.name == "lexical request") then { env.findType(expr) } else { expr }
+    }
+
+    // Reset trail which is used to track coinductive pairs for subtyping.
+    method acceptsSubtype(subtype) {
+        trail := nil
+        // Check all methods. If any are not subtyped in the subtype object then return false.
+        return compareMethods(self, subtype, { (p, s, n) -> acceptsCoinductive(p, s, n) })
     }
 
     // Compare another type with this type accounting for possible coinductive relationships (interacting infinte dependencies).
-    method acceptsSubtype(subtype) {
-        // Neither are custom types, fallback to base subtype comparison. Recursion lets this get checked at any point.
-        if ((subtype.name != "Interface") && (name != "Interface")) then {
-            return acceptsSubtypeBase(subtype)
+    method acceptsCoinductive(parent, subtype, meth) {
+        // Neither are custom types, fallback to base subtype comparison for all methods. Recursion lets this get checked at any point.
+        if ((subtype.name != "Interface") && (parent.name != "Interface")) then {
+            return compareMethods(parent, subtype, { (p, s, n) -> acceptsBase(p, s, n) })
         }
         // If one is not an interface but the other one is, it is not a coinductive or normal subtype as the structures differ.
-        if (!((subtype.name == "Interface") && (name == "Interface"))) then {
+        if (!((subtype.name == "Interface") && (parent.name == "Interface"))) then {
             return false
         }
 
+        // The subtype should at least have all methods of this type. TODO: differentiate them in the trail.
+        if (!subtype.hasMethod(meth.name)) then {
+            return false
+        }
+        def subtypeMeth = subtype.getMethod(meth.name)
+        
+        // Recurse on both parameters and return type.
+        def paramsA = meth.parameters
+        def paramsB = subtypeMeth.parameters
+        def returnA = lazyLexicalRequest(meth.returnType)
+        def returnB = lazyLexicalRequest(meth.returnType)
+        // TODO Make pairs for all parameters.
+        def pair = "return: {resultA.name}, {resultB.name}"
 
+        // If result pair in trail then it has already seen this pair hence it is a matching coinductive structure.
+        if (trail.contains { p -> p == pair }) then {
+            return true
+        }
+        // Otherwise add coinductive pair to trail.
+        trail.add(pair)
+
+        // Recurse for both parameters and return value.
+        //acceptsCoinductive()
+        //acceptsCoinductive()
+    }
+
+    // Compare another type with this type to check if matching/subtype.
+    method acceptsBase(parent, subtype, meth) {
+        // Unknown always subtypes and the same object subtypes.
+        if ((subtype.name == "Unknown") || (parent.name == "Unknown") || (parent == subtype)) then {
+            return true
+        }
+
+        // The subtype should at least have all methods of this type.
+        if (!subtype.hasMethod(meth.name)) then {
+            return false
+        }
+        def subtypeMeth = subtype.getMethod(meth.name)
+        // Compare the method params with the subtype.
+        if (!meth.argumentsSubtype(subtypeMeth.parameters)) then {
+            return false
+        }
+        if (!meth.returnType.acceptsSubtype(subtypeMeth.returnType)) then {
+            return false
+        }
+        // Succeeded method check. Name doesn't have to match.
+        return true
     }
 }
 
@@ -400,7 +447,7 @@ class VarNode(nm, decType, annotations, val) {
 class LexicalRequestNode(meth, args, generics) {
     def name is public = "lexical request"
     def methodName is public = meth
-    def cleanName is public = meth.substringFrom(1)to(methodName.size - 3) // No arguments e.g. "foo(1)" -> "foo".
+    def cleanName is public = meth.substringFrom(1)to(methodName.size - 3) // No arguments e.g. "foo(1)" becomes "foo".
     def arguments is public = args
     def genericParams is public = generics // Unused currently.
 
@@ -432,7 +479,7 @@ class DotRequestNode(rec, meth, args, generics) {
     def name is public = "dot request"
     def receiver is public = rec
     def methodName is public = meth
-    def cleanName is public = meth.substringFrom(1)to(methodName.size - 3) // No arguments e.g. "x.foo(1)" -> "x.foo".
+    def cleanName is public = meth.substringFrom(1)to(methodName.size - 3) // No arguments e.g. "x.foo(1)" becomes "x.foo".
     def arguments is public = args
     def genericParams is public = generics // Unused currently.
 
@@ -665,7 +712,7 @@ class IdentifierNode(nm, decType) {
 
 // Block for if statement, loop, lambda etc. Expressions within two braces "{}".
 class BlockNode(params, bdy) {
-    def name is public = "block"
+    def name is public = "block declaration"
     def parameters = params // Can have parameters for a lambda block.
     def body = bdy
 
@@ -733,14 +780,15 @@ class TypeNode(nm, generics, val) {
     // Add type to environment for typechecking new types from findType.
     method addToEnvironment(env) {
         // Either it gets the type representation of an interface, or it looks up an already defined type. e.g. String (or with union/intersection)
-        def valueType = if (value.name == "interface") then { value.asType(env) } else { env.findType(value) }
+        def valueType = if (value.name == "interface declaration") then { value.asType(env) } else { env.findType(value) }
+        valueType.typeDeclaredName := declaredName
         env.addType(declaredName, valueType)
     }
 }
 
 
 class InterfaceNode(bdy) {
-    def name is public = "interface"
+    def name is public = "interface declaration"
     def body is public = bdy
 
     method inferType(env) {
@@ -924,7 +972,7 @@ class Environment(par) {
     method findType(expr) is override {
         // Lexical request for types, BaseEnvironment has the default types such as String, Number and Boolean.
         if (expr.name == "lexical request") then {
-            def name =  expr.cleanName
+            def name = expr.cleanName
             
             // Search through declared types.
             if (types.containsKey(name)) then {
