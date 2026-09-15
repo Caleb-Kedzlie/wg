@@ -24,7 +24,8 @@ def EnvError = TypeError.refine "EnvError"
 
 
 //
-// #### AST METHODS ####  TODO: the annotations parameter in many of these nodes are unused. It is an advanced feature and my focus is on completing structural typing and then generics, so it may not be completed.
+// #### AST METHODS ####  
+// TODO: the annotations/generics parameters in many of these nodes are unused. It is an advanced feature and my focus is on completing structural typing and then generics, so it may not be completed.
 //
 
 
@@ -151,18 +152,18 @@ method d0S(source) { DialectNode(source) }
 // Create a method inside a type.
 class NewMethod(nm, params, rType) {
     def name is public = nm
-    def parameters is public = params
+    def paramTypes is public = params
     def returnType is public = rType
-    def paramNames = "{ parameters.map { p -> p.name }.join(", ") }"
+    def paramNames = "{ params.map { p -> p.name }.join(", ") }"
     def fullName is public = "{name}({paramNames}) -> {returnType.name}"
 
     // Check the sent args subtype the declared methods parameters.
-    method argumentsSubtype(args) {
+    method argumentsSubtype(argTypes) {
         // Check the number of arguments matches the parameters.
-        if (args.size != parameters.size) then {
+        if (argTypes.size != paramTypes.size) then {
             return false
         }
-        parameters.zip(args) do { param, arg ->
+        paramTypes.zip(argTypes) do { param, arg ->
             // Checking if the param matches the argument type.
             if (!param.acceptsSubtype(arg)) then {
                 return false
@@ -172,9 +173,9 @@ class NewMethod(nm, params, rType) {
     }
 
     // Reuses argument subtype check but throws error instead of returning false.
-    method checkArguments(args) {
-        def argNames = "{ args.map { a -> a.name }.join(", ") }"
-        if (!argumentsSubtype(args)) then {
+    method checkArguments(argTypes) {
+        def argNames = "{ argTypes.map { a -> a.name }.join(", ") }"
+        if (!argumentsSubtype(argTypes)) then {
             MethodError.raise "The method arguments for '{fullName}' must be [{paramNames}] not [{argNames}]"
         }
     }
@@ -203,7 +204,7 @@ class AnyType(nm) {
 
     method setupMethods(meths) {
         // Additional methods.
-        methods := meths 
+        methods := meths
         // Methods that all basic types have (excluding done).
         addMethod(NewMethod("==(1)", o1N(unknownType), booleanType))
         addMethod(NewMethod("!=(1)", o1N(unknownType), booleanType))
@@ -245,23 +246,23 @@ class AnyType(nm) {
     }
 
     // Handle interfaces not resolving lexical requests for methods.
-    method lazyLexicalRequest(env, expr) {
+    //method lazyLexicalRequest(env, expr) {
         // TODO somehow need to access env here. May need to update all acceptsSubtype to take env. OR resolve the types later with a two pass system for the method signatures.
-        return if (expr.name == "lexical request") then { env.findType(expr) } else { expr }
-    }
+        //return if (expr.name == "lexical request") then { env.findType(expr) } else { expr }
+    //}
 
     // Reset trail which is used to track coinductive pairs for subtyping.
     method acceptsSubtype(subtype) {
         trail := nil
         // Check all methods. If any are not subtyped in the subtype object then return false.
-        return compareMethods(self, subtype, { (p, s, n) -> acceptsCoinductive(p, s, n) })
+        return compareMethods(self, subtype, { p, s, n -> acceptsCoinductive(p, s, n) })
     }
 
     // Compare another type with this type accounting for possible coinductive relationships (interacting infinte dependencies).
     method acceptsCoinductive(parent, subtype, meth) {
         // Neither are custom types, fallback to base subtype comparison for all methods. Recursion lets this get checked at any point.
         if ((subtype.name != "Interface") && (parent.name != "Interface")) then {
-            return compareMethods(parent, subtype, { (p, s, n) -> acceptsBase(p, s, n) })
+            return compareMethods(parent, subtype, { p, s, n -> acceptsBase(p, s, n) })
         }
         // If one is not an interface but the other one is, it is not a coinductive or normal subtype as the structures differ.
         if (!((subtype.name == "Interface") && (parent.name == "Interface"))) then {
@@ -274,11 +275,11 @@ class AnyType(nm) {
         }
         def subtypeMeth = subtype.getMethod(meth.name)
         
-        // Recurse on both parameters and return type.
-        def paramsA = meth.parameters
-        def paramsB = subtypeMeth.parameters
-        def returnA = lazyLexicalRequest(meth.returnType)
-        def returnB = lazyLexicalRequest(meth.returnType)
+        // Recurse on both parameters and return type. TODO switch lazyLexicalRequest for a second pass of addToEnv().
+        def paramsA = meth.paramTypes
+        def paramsB = subtypeMeth.paramTypes
+        def returnA = meth.returnType
+        def returnB = meth.returnType
         // TODO Make pairs for all parameters.
         def pair = "return: {resultA.name}, {resultB.name}"
 
@@ -307,7 +308,7 @@ class AnyType(nm) {
         }
         def subtypeMeth = subtype.getMethod(meth.name)
         // Compare the method params with the subtype.
-        if (!meth.argumentsSubtype(subtypeMeth.parameters)) then {
+        if (!meth.argumentsSubtype(subtypeMeth.paramTypes)) then {
             return false
         }
         if (!meth.returnType.acceptsSubtype(subtypeMeth.returnType)) then {
@@ -525,6 +526,12 @@ method addDeclarations(env, body) {
             (expr.name == "type declaration") || (expr.name == "method declaration") ||
             (expr.name == "import statement")) then {
             expr.addToEnvironment(env)
+        }
+    }
+    // Second pass for type declarations to resolve dependencies and detect undeclared types.
+    body.do { expr ->
+        if (expr.name == "type declaration") then {
+            env.resolveTypeDecl(expr.declaredName)
         }
     }
 }
@@ -765,7 +772,7 @@ class TypeNode(nm, generics, val) {
     }
 
     method checkType(env, expected) {
-        // Type declarations need initial value, so if it is nil (uses unknownType), raise error.
+        // Type declarations need initial value (like def), so if it is nil (uses unknownType), raise error.
         if (value.name == "Unknown") then {
             TypeDeclError.raise "{name} needs initial value"
         }
@@ -779,7 +786,7 @@ class TypeNode(nm, generics, val) {
 
     // Add type to environment for typechecking new types from findType.
     method addToEnvironment(env) {
-        // Either it gets the type representation of an interface, or it looks up an already defined type. e.g. String (or with union/intersection)
+        // Either it gets the type representation of an interface, or it looks up an already defined type. e.g. String (or with union/intersection).
         def valueType = if (value.name == "interface declaration") then { value.asType(env) } else { env.findType(value) }
         valueType.typeDeclaredName := declaredName
         env.addType(declaredName, valueType)
@@ -822,18 +829,16 @@ class InterfaceNode(bdy) {
 }
 
 
-// Method signature within an interface, e.g. interface { foo(a) -> String }
+// Method signature within an interface, e.g. interface { foo(a : String) -> String }
 class MethodSignatureNode(parts, rType) {
     def name is public = "method signature"
     def declaredName is public = parts.map { part -> "{part.declaredName}({part.parameters.size})" }.join("")
-    def parameters is public = parts.flatMap { part -> part.parameters } // Merges into single list of identifier nodes.
+    // Does not resolve lexical requests immediately (to handle depdendencies later) for return type and parameters.
+    def lexicalParams is public = parts.flatMap { part -> part.parameters }.map { param -> param.declaredType } // Merges parts into single list.
     def lexicalReturnType is public = if (isNil(rType)) then { unknownType } else { rType.first } // unknownType if nil.
 
     // Convert this method signature into a NewMethod object for typechecking interfaces.
     method asMethod(env) {
-        // Does not resolve lexical requests immediately for return type and parameters.
-        def lexicalParams = parameters.map { param -> env.findType(param.declaredType) }
-        // Add NewMethod object to environment.
         return NewMethod(declaredName, lexicalParams, lexicalReturnType)
     }
 }
@@ -907,7 +912,7 @@ class DialectNode(src) {
 // The top-most parent of any Environment is BaseEnvironment and is recusively reached when searching for variables/methods to terminate if not found.
 class Environment(par) {
     inherit BaseEnvironment
-    def parent is public = par
+    def parent = par
     var methods := nil // Storing methods and variable getters.
     var types := collections.dictionary [] // For type declaration nodes.
     // These two are used if this environment itself is a method.
@@ -963,7 +968,6 @@ class Environment(par) {
         // while loop parent.parent types.containsKey
 
         if (types.containsKey(nm)) then {
-            // TODO Have a placeholder type with like a nil body to show that is a placeholder to replace later.
             EnvError.raise "Same name {nm} used for a type declaration already"
         }
         types.at(nm) put(val)
@@ -982,7 +986,35 @@ class Environment(par) {
         return parent.findType(expr)
     }
 
-    // Make an AnyType representation of this environment for typechecking.
+    method resolveTypeDecl(typeName) is override {
+        if (types.containsKey(typeName)) then {
+            def placeholderType = types.at(typeName)
+            def newMethods = nil
+            placeholderType.methodsApply { meth ->
+                def resolvedParams = meth.paramTypes.map { param -> findType(param) }
+                def resolvedReturn = findType(meth.returnType)
+                def resolvedMethod = NewMethod(meth.name, resolvedParams, resolvedReturn)
+                newMethods.add(resolvedMethod) 
+            }
+
+            // Mutate the methods but don't replace the type, so all the dependency references are preseved.
+            placeholderType.setupMethods(newMethods)
+
+            // TODO remove this if no longer necessary. It processes the typeNodes again instead of directly resolving -> Type: Interface: [NewMethod(lexicalRequests)].
+            // The value is the interface, then for each method signature in body, check param and return type exist.
+            //typeNode.value.body.do { sig -> 
+                // TODO extract these values and use them for a new method.
+                //sig.lexicalParams.do {
+                //    lexicalParam -> findType(lexicalParam)
+                //}
+                //findType(sig.lexicalReturnType) 
+            //}
+        } else {
+            parent.resolveTypeDecl(typeName) // TODO this may be able to be removed because the types are resolved in the environment they are declared.
+        }
+    }
+
+    // Make an AnyType representation of this environment for typechecking ObjectNode.
     method asType {
         def envType = AnyType("Environment")
         methods.do { x ->
@@ -1060,7 +1092,11 @@ class BaseEnvironment {
         if (baseTypes.containsKey(name)) then {
             return baseTypes.at(name)
         }
-        EnvError.raise "Unexpected type in environment: '{name}'"
+        EnvError.raise "Unexpected type in the environment: '{name}'"
+    }
+
+    method resolveTypeDecl(typeName) {
+        EnvError.raise "This type was never declared in the environment: '{typeName}'"
     }
 }
 
@@ -1071,7 +1107,7 @@ class BaseEnvironment {
 
 print("\n-----Tests-----")
 var testNumber := 1 // Increments after each test.
-var succeededTests := 0 // Increments each success to print total.
+var succeededTests := 0 // Increments each success to print out of total.
 
 // Default error is TypeError, but specific errors can be checked to ensure the correct node threw the error.
 method assertFails(ast) {
@@ -1110,7 +1146,7 @@ method assertPasses(ast) {
     testNumber := testNumber + 1
 }
 
-// Eventually I will make it parse files directly for the tests. Add new tests to the end to not mess up test number order.
+// I could eventually make it parse files directly for the tests. Add new tests to the end to not mess up test number order.
 
 // TEST 1
 // 3
