@@ -181,9 +181,11 @@ class NewMethod(nm, params, rType) {
     }
 
     method asString {
-        return name
+        // TODO I want this nice format but it makes some tests fail?
+        return "{name}" // -> {returnType.declaredName}"
     }
 }
+
 
 // Helper to make method with one argument with same type as the return type.
 method sameArgMeth(name, rType) {
@@ -198,12 +200,11 @@ method arglessMeth(name, rType) {
 // Node for all literal types to be built upon.
 class AnyType(nm) {
     var name is public := nm
-    var typeDeclaredName is public := nil // "A" in "type A = interface {...}".
+    var declaredName is public := nm // "String" or "A" in "type A = interface {...}".
     var methods := nil
-    var trail := nil
 
+    // Setup multiple methods alongside some default ones.
     method setupMethods(meths) {
-        // Additional methods.
         methods := meths
         // Methods that all basic types have (excluding done).
         addMethod(NewMethod("==(1)", o1N(unknownType), booleanType))
@@ -211,6 +212,7 @@ class AnyType(nm) {
         addMethod(NewMethod("asString(0)", nil, stringType))
     }
 
+    // Add a method to the methods list.
     method addMethod(meth) {
         methods.add(meth)
     }
@@ -220,6 +222,7 @@ class AnyType(nm) {
         methods.contains { meth -> meth.name == methName } 
     }
 
+    // Get a method using a string name.
     method getMethod(methName) {
         methods.do { meth -> 
             if (meth.name == methName) then { return meth } 
@@ -227,11 +230,12 @@ class AnyType(nm) {
         TypeError.raise "Method {methName} does not exist for {name}"
     }
 
+    // Apply a block to every method to allow some external mutation.
     method methodsApply(block) {
         methods.do(block)
     }
 
-    // Format name with methods.
+    // Format name with methods for easy debugging.
     method asString {
         return "{name} ['{methods.join("', '")}']"
     }
@@ -245,54 +249,62 @@ class AnyType(nm) {
         return result
     }
 
-    // Handle interfaces not resolving lexical requests for methods.
-    //method lazyLexicalRequest(env, expr) {
-        // TODO somehow need to access env here. May need to update all acceptsSubtype to take env. OR resolve the types later with a two pass system for the method signatures.
-        //return if (expr.name == "lexical request") then { env.findType(expr) } else { expr }
-    //}
-
     // Reset trail which is used to track coinductive pairs for subtyping.
     method acceptsSubtype(subtype) {
-        trail := nil
         // Check all methods. If any are not subtyped in the subtype object then return false.
-        return compareMethods(self, subtype, { p, s, n -> acceptsCoinductive(p, s, n) })
+        return compareMethods(self, subtype, { p, s, n -> acceptsCoinductive(p, s, n, nil) })
     }
 
     // Compare another type with this type accounting for possible coinductive relationships (interacting infinte dependencies).
-    method acceptsCoinductive(parent, subtype, meth) {
+    method acceptsCoinductive(parent, subtype, meth, prevTrail) { // TODO send a list copy as parameter so it doesn't see other branches.
+        // TODO check if the unknown checking here is correct. I want the parent == subtype to stay, because if they are the same type, no need to use coinduction.
+        if ((subtype.name == "Unknown") || (parent.name == "Unknown") || (parent == subtype)) then {
+            return true
+        }
+
         // Neither are custom types, fallback to base subtype comparison for all methods. Recursion lets this get checked at any point.
         if ((subtype.name != "Interface") && (parent.name != "Interface")) then {
             return compareMethods(parent, subtype, { p, s, n -> acceptsBase(p, s, n) })
         }
-        // If one is not an interface but the other one is, it is not a coinductive or normal subtype as the structures differ.
+        // If one is not an interface but the other one is, it is not a coinductive or a normal subtype as the structures differ.
         if (!((subtype.name == "Interface") && (parent.name == "Interface"))) then {
             return false
         }
 
-        // The subtype should at least have all methods of this type. TODO: differentiate them in the trail.
+        // TODO add the original comparison/types to the trail. e.g typechecking A == B add (A, B) then recurse on their params and return types for each method.
+        // Copy the trail so it does not mutate other branches.
+        def trail = collections.list(prevTrail)
+        def pair = "({parent.declaredName}, {subtype.declaredName})"
+        // If result pair is in the trail, then it has already seen this pair in a dependency loop, hence it is an equivalent coinductive structure.
+        if (trail.contains { p -> p == pair }) then {
+            return true
+        }
+        trail.add(pair)
+
+        // If the subtype does not have a matching method, then it is not equivalent.
         if (!subtype.hasMethod(meth.name)) then {
             return false
         }
         def subtypeMeth = subtype.getMethod(meth.name)
-        
-        // Recurse on both parameters and return type. TODO switch lazyLexicalRequest for a second pass of addToEnv().
-        def paramsA = meth.paramTypes
-        def paramsB = subtypeMeth.paramTypes
-        def returnA = meth.returnType
-        def returnB = meth.returnType
-        // TODO Make pairs for all parameters.
-        def pair = "return: {resultA.name}, {resultB.name}"
-
-        // If result pair in trail then it has already seen this pair hence it is a matching coinductive structure.
-        if (trail.contains { p -> p == pair }) then {
-            return true
+        // If the parameter arity is different between parent and subtype, then they are not equivalent.
+        def paramsParent = meth.paramTypes
+        def paramsSubtype = subtypeMeth.paramTypes
+        if (paramsParent.size != paramsSubtype.size) then {
+            return false
         }
-        // Otherwise add coinductive pair to trail.
-        trail.add(pair)
+        // Also get the return type of parent and subtype for this method.
+        def returnParent = meth.returnType
+        def returnSubtype = subtypeMeth.returnType
+        
+        // For the parent and child return types of this method, coinductively recurse on all the methods within them. Uses current trail.
+        var result : Boolean := compareMethods(returnParent, returnSubtype, { p, s, n -> acceptsCoinductive(p, s, n, trail) })
+        
+        // Do the same coinductive recursion as the return types, but for every pair of parameter types.
+        paramsParent.zip(paramsSubtype) do { par, sub ->
+            result := result && compareMethods(par, sub, { p, s, n -> acceptsCoinductive(p, s, n, trail) })
+        }
 
-        // Recurse for both parameters and return value.
-        //acceptsCoinductive()
-        //acceptsCoinductive()
+        return result
     }
 
     // Compare another type with this type to check if matching/subtype.
@@ -324,6 +336,7 @@ class AnyType(nm) {
 def unknownType = object {
     def name is public = "Unknown"
 
+    method methodsApply(block) {}
     method acceptsSubtype(_) { return true }
     method asString { return name }
     method addMethod(_) { TypeError.raise "Unknown type cannot add methods"}
@@ -693,7 +706,7 @@ class MethodNode(parts, rType, anns, bdy) {
         def returnType = env.findType(lexicalReturnType)
         // CheckType already enforces all params are IdentifierNodes. Lexically finds the param types.
         def paramTypes = parameters.map { param -> env.findType(param.declaredType) }
-        // Add NewMethod object to environment.
+        // Add a NewMethod object to environment.
         def methodFormat = NewMethod(declaredName, paramTypes, returnType)
         env.addMethod(methodFormat) 
     }
@@ -788,7 +801,7 @@ class TypeNode(nm, generics, val) {
     method addToEnvironment(env) {
         // Either it gets the type representation of an interface, or it looks up an already defined type. e.g. String (or with union/intersection).
         def valueType = if (value.name == "interface declaration") then { value.asType(env) } else { env.findType(value) }
-        valueType.typeDeclaredName := declaredName
+        valueType.declaredName := declaredName
         env.addType(declaredName, valueType)
     }
 }
@@ -986,7 +999,7 @@ class Environment(par) {
         return parent.findType(expr)
     }
 
-    method resolveTypeDecl(typeName) is override {
+    method resolveTypeDecl(typeName) {
         if (types.containsKey(typeName)) then {
             def placeholderType = types.at(typeName)
             def newMethods = nil
@@ -996,21 +1009,11 @@ class Environment(par) {
                 def resolvedMethod = NewMethod(meth.name, resolvedParams, resolvedReturn)
                 newMethods.add(resolvedMethod) 
             }
-
             // Mutate the methods but don't replace the type, so all the dependency references are preseved.
             placeholderType.setupMethods(newMethods)
-
-            // TODO remove this if no longer necessary. It processes the typeNodes again instead of directly resolving -> Type: Interface: [NewMethod(lexicalRequests)].
-            // The value is the interface, then for each method signature in body, check param and return type exist.
-            //typeNode.value.body.do { sig -> 
-                // TODO extract these values and use them for a new method.
-                //sig.lexicalParams.do {
-                //    lexicalParam -> findType(lexicalParam)
-                //}
-                //findType(sig.lexicalReturnType) 
-            //}
         } else {
-            parent.resolveTypeDecl(typeName) // TODO this may be able to be removed because the types are resolved in the environment they are declared.
+            // Shouldn't occur if the two-pass system is working in the addDeclarations method.
+            EnvError.raise "This type was not detected despite being declared in this environment: '{typeName}'"
         }
     }
 
@@ -1092,11 +1095,7 @@ class BaseEnvironment {
         if (baseTypes.containsKey(name)) then {
             return baseTypes.at(name)
         }
-        EnvError.raise "Unexpected type in the environment: '{name}'"
-    }
-
-    method resolveTypeDecl(typeName) {
-        EnvError.raise "This type was never declared in the environment: '{typeName}'"
+        EnvError.raise "Unexpected type not present in the environment: '{name}'"
     }
 }
 
@@ -1387,9 +1386,9 @@ assertPasses(o0C(o1N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(
 
 // TEST 55 (Implemented)
 // type A = interface { foo -> A }
-// class Aclass { method foo -> Aclass { return self } }
+// class Aclass { method foo -> A { return self } }
 // def x : A = Aclass
-assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(0)",nil,nil)))))),c2N(m0D(o1N(p0T("Aclass",nil,nil)),nil,nil,o1N(o0C(o1N(m0D(o1N(p0T("foo",nil,nil)),o1N(l0R("Aclass(0)",nil,nil)),nil,o1N(r3T(l0R("self(0)",nil,nil))))),nil))),d3F("x",o1N(l0R("A(0)",nil,nil)),nil,l0R("Aclass(0)",nil,nil)))),nil))
+assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(0)",nil,nil)))))),c2N(m0D(o1N(p0T("Aclass",nil,nil)),nil,nil,o1N(o0C(o1N(m0D(o1N(p0T("foo",nil,nil)),o1N(l0R("A(0)",nil,nil)),nil,o1N(r3T(l0R("self(0)",nil,nil))))),nil))),d3F("x",o1N(l0R("A(0)",nil,nil)),nil,l0R("Aclass(0)",nil,nil)))),nil))
 
 // TEST 56 (Coinductive loops)
 // type A = interface { foo -> A }
@@ -1440,7 +1439,7 @@ assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("Str
 // def b : B = a
 assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("C(0)",nil,nil)))))),c0N(t0D("C",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("D(0)",nil,nil)))))),c0N(t0D("D",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("a",o1N(l0R("A(0)",nil,nil)),nil,nil),d3F("b",o1N(l0R("B(0)",nil,nil)),nil,l0R("a(0)",nil,nil))))))),nil))
 
-// TEST 62 (Refined subtype)
+// TEST 62 (Refined subtype) TODO gives dot request error because '|' operator does not exist.
 // type A = interface { foo -> A }
 // type B = interface { foo -> B }
 // type X = interface { bar(_ : String) }
