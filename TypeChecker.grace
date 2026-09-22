@@ -182,7 +182,7 @@ class NewMethod(nm, params, rType) {
 
     method asString {
         // TODO I want this nice format but it makes some tests fail?
-        return "{name}" // -> {returnType.declaredName}"
+        return "{name}->{returnType.declaredName}"
     }
 }
 
@@ -199,9 +199,9 @@ method arglessMeth(name, rType) {
 
 // Node for all literal types to be built upon.
 class AnyType(nm) {
-    var name is public := nm
+    def name is public = nm
     var declaredName is public := nm // "String" or "A" in "type A = interface {...}".
-    var methods := nil
+    var methods is public := nil
 
     // Setup multiple methods alongside some default ones.
     method setupMethods(meths) {
@@ -212,6 +212,11 @@ class AnyType(nm) {
         addMethod(NewMethod("asString(0)", nil, stringType))
     }
 
+    // Checks if the type is an Interface or Environment (instead of just Interface, so that self can assign to a custom type).
+    method selfOrInterface -> Boolean {
+        return (name == "Interface") || (name == "Environment")
+    }
+
     // Add a method to the methods list.
     method addMethod(meth) {
         methods.add(meth)
@@ -219,7 +224,7 @@ class AnyType(nm) {
 
     // I want it to throw an error if a method doesn't exist usually. Only used for subtype checking.
     method hasMethod(methName) {
-        methods.contains { meth -> meth.name == methName } 
+        return methods.contains { meth -> meth.name == methName } 
     }
 
     // Get a method using a string name.
@@ -230,11 +235,6 @@ class AnyType(nm) {
         TypeError.raise "Method {methName} does not exist for {name}"
     }
 
-    // Apply a block to every method to allow some external mutation.
-    method methodsApply(block) {
-        methods.do(block)
-    }
-
     // Format name with methods for easy debugging.
     method asString {
         return "{name} ['{methods.join("', '")}']"
@@ -243,7 +243,7 @@ class AnyType(nm) {
     // If any methods are not subtyped from parent via a certain function then return false.
     method compareMethods(parent, subtype, block) {
         var result : Boolean := true
-        parent.methodsApply { meth ->
+        parent.methods.do { meth ->
             result := result && block.apply(parent, subtype, meth)
         }
         return result
@@ -263,15 +263,14 @@ class AnyType(nm) {
         }
 
         // Neither are custom types, fallback to base subtype comparison for all methods. Recursion lets this get checked at any point.
-        if ((subtype.name != "Interface") && (parent.name != "Interface")) then {
+        if (!subtype.selfOrInterface && !parent.selfOrInterface) then {
             return compareMethods(parent, subtype, { p, s, n -> acceptsBase(p, s, n) })
         }
         // If one is not an interface but the other one is, it is not a coinductive or a normal subtype as the structures differ.
-        if (!((subtype.name == "Interface") && (parent.name == "Interface"))) then {
+        if (!(subtype.selfOrInterface && parent.selfOrInterface)) then {
             return false
         }
 
-        // TODO add the original comparison/types to the trail. e.g typechecking A == B add (A, B) then recurse on their params and return types for each method.
         // Copy the trail so it does not mutate other branches.
         def trail = collections.list(prevTrail)
         def pair = "({parent.declaredName}, {subtype.declaredName})"
@@ -298,12 +297,10 @@ class AnyType(nm) {
         
         // For the parent and child return types of this method, coinductively recurse on all the methods within them. Uses current trail.
         var result : Boolean := compareMethods(returnParent, returnSubtype, { p, s, n -> acceptsCoinductive(p, s, n, trail) })
-        
         // Do the same coinductive recursion as the return types, but for every pair of parameter types.
         paramsParent.zip(paramsSubtype) do { par, sub ->
             result := result && compareMethods(par, sub, { p, s, n -> acceptsCoinductive(p, s, n, trail) })
         }
-
         return result
     }
 
@@ -314,11 +311,12 @@ class AnyType(nm) {
             return true
         }
 
-        // The subtype should at least have all methods of this type.
+        // The subtype should at least have the methods of the parent type.
         if (!subtype.hasMethod(meth.name)) then {
             return false
         }
         def subtypeMeth = subtype.getMethod(meth.name)
+
         // Compare the method params with the subtype.
         if (!meth.argumentsSubtype(subtypeMeth.paramTypes)) then {
             return false
@@ -335,8 +333,10 @@ class AnyType(nm) {
 // Singleton for unknown types that can assign to any variable or be used in a method like "==(1)" that compares to any type.
 def unknownType = object {
     def name is public = "Unknown"
+    def declaredName is public = "Unknown"
+    def methods is public = nil
 
-    method methodsApply(block) {}
+    method compareMethods(_, _, _) { return true }
     method acceptsSubtype(_) { return true }
     method asString { return name }
     method addMethod(_) { TypeError.raise "Unknown type cannot add methods"}
@@ -353,10 +353,12 @@ def stringType = AnyType("String")
 def booleanType = AnyType("Boolean")
 def doneType = AnyType("Done") // Similar to void, def/var/methods without return/types return this when done.
 def importType = AnyType("Import") // Special case for imported types as they have unknown methods (always succeeds).
+def arglessBlockType = AnyType("Block") // Block without args, such as for an if statement.
 
 numberType.setupMethods(c0N(sameArgMeth("+(1)", numberType), c2N(sameArgMeth("*(1)", numberType), sameArgMeth("..(1)", numberType))))
 stringType.setupMethods(c2N(sameArgMeth("++(1)", stringType), arglessMeth("size(0)", numberType)))
 booleanType.setupMethods(o1N(arglessMeth("prefix!(0)", booleanType)))
+arglessBlockType.addMethod(NewMethod("apply(0)", nil, unknownType))
 doneType.addMethod(NewMethod("asString(0)", nil, stringType)) // DoneType only has asString(0).
 
 
@@ -411,7 +413,7 @@ class DefNode(nm, decType, annotations, val) {
     }
 
     method addToEnvironment(env) {
-        // If there is no declared type, use the inferred value instead. This fixes BlockNodes.
+        // If there is no declared type, use the inferred value instead.
         def varType = if (declaredType.name == "Unknown") then { value.inferType(env) } else { env.findType(declaredType) }
         // Getter for the variable i.e. "x" or "x()", but no assignment like "x := 3" or "x = 3", after intially set.
         def meth = NewMethod(declaredName ++ "(0)", nil, varType)
@@ -446,7 +448,7 @@ class VarNode(nm, decType, annotations, val) {
     }
 
     method addToEnvironment(env) {
-        // If there is no declared type, use the inferred value instead. This fixes BlockNodes.
+        // If there is no declared type, use the inferred value instead.
         def varType = if (declaredType.name == "Unknown") then { value.inferType(env) } else { env.findType(declaredType) }
         // Get and assign for the variable i.e. "x" or "x()", and "x := 3"
         def meth = NewMethod(declaredName ++ "(0)", nil, varType)
@@ -752,8 +754,9 @@ class BlockNode(params, bdy) {
         // Add the body declarations to this environment
         addDeclarations(deeperEnv, body)
 
-        // The block return type is done by default. Updates to the final element.
-        var returnType := doneType
+        // TODO could flag early returns as making unreachable code inside a block.
+        // The block return type is unknown by default. Updates to the final element.
+        var returnType := unknownType
         body.do { expr ->
             returnType := expr.inferType(deeperEnv)
             expr.checkType(deeperEnv, unknownType) // Propagate typechecks on children.
@@ -1003,13 +1006,13 @@ class Environment(par) {
         if (types.containsKey(typeName)) then {
             def placeholderType = types.at(typeName)
             def newMethods = nil
-            placeholderType.methodsApply { meth ->
+            placeholderType.methods.do { meth ->
                 def resolvedParams = meth.paramTypes.map { param -> findType(param) }
                 def resolvedReturn = findType(meth.returnType)
                 def resolvedMethod = NewMethod(meth.name, resolvedParams, resolvedReturn)
                 newMethods.add(resolvedMethod) 
             }
-            // Mutate the methods but don't replace the type, so all the dependency references are preseved.
+            // Mutate the methods but don't replace the type, so all the references in the 'types' list are preseved.
             placeholderType.setupMethods(newMethods)
         } else {
             // Shouldn't occur if the two-pass system is working in the addDeclarations method.
@@ -1020,9 +1023,7 @@ class Environment(par) {
     // Make an AnyType representation of this environment for typechecking ObjectNode.
     method asType {
         def envType = AnyType("Environment")
-        methods.do { x ->
-            envType.addMethod(x)
-        }
+        envType.setupMethods(methods)
         return envType
     }
 }
@@ -1050,16 +1051,16 @@ class BaseEnvironment {
     // Helper to make standard library if/elseif/else cases.
     method createIfElse(elseifCount : Number, hasElse : Boolean) is private {
         var name := "if(1)then(1)"
-        var params := c2N(booleanType, unknownType)
+        var params := c2N(booleanType, arglessBlockType)
         for (1..elseifCount) do {
             name := name ++ "elseif(1)then(1)"
             // Add the condition and block.
             params.add(booleanType)
-            params.add(unknownType)
+            params.add(arglessBlockType)
         }
         if (hasElse) then { 
             name := name ++ "else(1)"
-            params.add(unknownType)
+            params.add(arglessBlockType)
         }
         return NewMethod(name, params, unknownType)
     }
@@ -1430,7 +1431,7 @@ assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("St
 // def b : B = a
 assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("C(0)",nil,nil)))))),c0N(t0D("C",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("String(0)",nil,nil)))))),c2N(v4R("a",o1N(l0R("A(0)",nil,nil)),nil,nil),d3F("b",o1N(l0R("B(0)",nil,nil)),nil,l0R("a(0)",nil,nil)))))),nil))
 
-// Test 61 (Coinductive equivalent, both infinite foo dependencies but A -> A vs B -> C -> D -> B)
+// Test 61 (Coinductive structurally equivalent, both infinite foo dependencies but A -> A... vs B -> C -> D -> B...)
 // type A = interface { foo -> A }
 // type B = interface { foo -> C }
 // type C = interface { foo -> D }
@@ -1461,7 +1462,7 @@ assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(
 // var y : B := x
 assertPasses(o0C(c0N(t0D("A",nil,i0C(nil)),c0N(t0D("B",nil,l0R("A(0)",nil,nil)),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,o1N(n0M(1))),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
 
-// TEST 64
+// TEST 64 (nested dot requests on unknown import type).
 // import "test" as test
 // test.y.z
 assertPasses(o0C(c2N(i0M("test",i0D("test",nil)),d0R(d0R(l0R("test(0)",nil,nil),"y(0)",nil,nil),"z(0)",nil,nil)),nil))
@@ -1513,6 +1514,91 @@ assertFails(o0C(c2N(d3F("y",nil,nil,s0L("hi")),d3F("x",o1N(l0R("Number(0)",nil,n
 // def Test = object {}
 // class Test {}
 assertFails(o0C(c2N(d3F("Test",nil,nil,o0C(nil,nil)),m0D(o1N(p0T("Test",nil,nil)),nil,nil,o1N(o0C(nil,nil)))),nil), EnvError)
+
+// TEST 74 (Non-terminating D)
+// type A = interface { foo (_ : C) -> C }
+// type B = interface { foo (_ : D) -> D }
+// type C = interface { foo -> String }
+// type D = interface { foo -> D }
+// var a : A
+// def b : B = a
+assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("C(0)",nil,nil)))),nil)),o1N(l0R("C(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("D(0)",nil,nil)))),nil)),o1N(l0R("D(0)",nil,nil)))))),c0N(t0D("C",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(t0D("D",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("D(0)",nil,nil)))))),c2N(v4R("a",o1N(l0R("A(0)",nil,nil)),nil,nil),d3F("b",o1N(l0R("B(0)",nil,nil)),nil,l0R("a(0)",nil,nil))))))),nil), DefError)
+
+// TEST 75 (Valid multi param methods) The next few tests check all possible permutations of this.
+// type A = interface { foo (_ : String, _ : B) -> B }
+// type B = interface { foo (_ : String, _ : A) -> B }
+// var x : A
+// var y : B := x
+assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
+
+// TEST 76 (Non-terminating param compared to terminating)
+// type A = interface { foo (_ : String, _ : B) -> B }
+// type B = interface { foo (_ : A, _ : A) -> B }
+// var x : A
+// var y : B := x
+assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("A(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+
+// TEST 77 (Different terminating type)
+// type A = interface { foo (_ : String, _ : B) -> B }
+// type B = interface { foo (_ : Number, _ : A) -> B }
+// var x : A
+// var y : B := x
+assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("Number(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+
+// TEST 78 (Different method name)
+// type A = interface { foo (_ : String, _ : B) -> B }
+// type B = interface { bar (_ : String, _ : A) -> B }
+// var x : A
+// var y : B := x
+assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("bar",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+
+// TEST 79 (Unknown return)
+// type A = interface { foo (_ : String, _ : B) -> B }
+// type B = interface { foo (_ : String, _ : A) }
+// var x : A
+// var y : B := x
+assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),nil)))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
+
+// TEST 80 (Unknown params, subtype works in both directions)
+// type A = interface { foo (_ : String, _ : B) -> B }
+// type B = interface { foo (_, _) }
+// var x : A
+// var y : B := x
+// var x2 : B
+// var y2 : A := x2
+assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",nil),i0D("_",nil)),nil)),nil)))),c0N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),c0N(v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil))),c2N(v4R("x2",o1N(l0R("B(0)",nil,nil)),nil,nil),v4R("y2",o1N(l0R("A(0)",nil,nil)),nil,o1N(l0R("x2(0)",nil,nil)))))))),nil))
+
+// TEST 81 (Different number of params)
+// type A = interface { foo (_ : String, _ : B) -> B }
+// type B = interface { foo (_ : String) -> B }
+// var x : A
+// var y : B := x
+assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+
+
+// TEST 82 (Multiple methods success)
+// type A = interface { 
+//     foo (_ : String, _ : B) -> B
+//     bar (_ : String) -> A
+// }
+// type B = interface { 
+//     foo (_ : String, _ : A) -> B 
+//     bar (_ : String) -> B
+// }
+// var x : A
+// var y : B := x
+assertPasses(o0C(c0N(t0D("A",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))),m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))),m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
+
+// TEST 82 (Multiple methods failure)
+// type A = interface { 
+//     foo (_ : String, _ : B) -> B
+//     bar (_ : String) -> A
+// }
+// type B = interface { foo (_ : String, _ : A) -> B }
+// var x : A
+// var y : B := x
+assertFails(o0C(c0N(t0D("A",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))),m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+
 
 
 // TEST ? put after lineups.
