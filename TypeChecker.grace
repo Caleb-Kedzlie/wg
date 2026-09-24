@@ -94,10 +94,10 @@ method a5N(lhs, rhs) {
     if (lhs.name == "lexical request") then {
         def methName = lhs.cleanName ++ ":=(1)"
         // If rhs does not match the old type of the variable this fails to typecheck in LexicalRequestNode.
-        return LexicalRequestNode(methName, o1N(rhs), nil) 
-    } elseif (lhs.name == "dot request") then {
+        return LexicalRequestNode(methName, o1N(rhs), doneType) 
+    } elseif {lhs.name == "dot request"} then {
         def methName = lhs.cleanName ++ ":=(1)"
-        return DotRequestNode(lhs.receiver, methName, o1N(rhs), nil)
+        return DotRequestNode(lhs.receiver, methName, o1N(rhs), doneType)
     } else {
         VarError.raise "Invalid left side of variable assignment: '{lhs.name}'"
     }
@@ -152,8 +152,9 @@ method d0S(source) { DialectNode(source) }
 // Create a method inside a type.
 class NewMethod(nm, params, rType) {
     def name is public = nm
-    def paramTypes is public = params
-    def returnType is public = rType
+    // Has to be mutable for a5N to work.
+    var paramTypes is public := params
+    var returnType is public := rType
     def paramNames = "{ params.map { p -> p.name }.join(", ") }"
     def fullName is public = "{name}({paramNames}) -> {returnType.name}"
 
@@ -210,6 +211,10 @@ class AnyType(nm) {
         addMethod(NewMethod("==(1)", o1N(unknownType), booleanType))
         addMethod(NewMethod("!=(1)", o1N(unknownType), booleanType))
         addMethod(NewMethod("asString(0)", nil, stringType))
+        // Methods for variants, unions and intersections between types.
+        addMethod(NewMethod("|(1)", o1N(unknownType), unknownType))
+        addMethod(NewMethod("&(1)", o1N(unknownType), unknownType))
+        addMethod(NewMethod("+(1)", o1N(unknownType), unknownType))
     }
 
     // Checks if the type is an Interface or Environment (instead of just Interface, so that self can assign to a custom type).
@@ -368,6 +373,10 @@ class LiteralNode(nm, v, lit) {
     def name is public = nm
     def value is public = v
     def literal is public = lit
+
+    method asString { 
+        return name 
+    }
     
     method inferType(env) {
         return literal
@@ -459,6 +468,20 @@ class VarNode(nm, decType, annotations, val) {
 }
 
 
+// Detect a reassignment to change the type of potentially unknown variable.
+method reassignChangesType(env, cleanName, args, getter, setter) {
+    if (args.size != 1) then {
+        LexicalReqError.raise "A reassignment lexical request must take 1 argument"
+    }
+    def argType = args.first.inferType(env)
+    // If it initially was unknown, make getter and setter now use the argument type (which could still be unknown).
+    if (getter.returnType.name == "Unknown") then {
+        getter.returnType := argType
+        setter.paramTypes := o1N(argType)
+    }
+}
+
+
 // Searches for a method in this environment and outer environments (until found or error thrown).
 class LexicalRequestNode(meth, args, generics) {
     def name is public = "lexical request"
@@ -473,6 +496,15 @@ class LexicalRequestNode(meth, args, generics) {
         // Check that the method takes the inferred arguments.
         def argumentTypes = arguments.map { a -> a.inferType(env) }
         targetMethod.checkArguments(argumentTypes) // Check arguments are subtype or throw error.
+
+        // If the variable was called test, looks up "test(0)" getter from "test:=(1)".
+        if (cleanName.size > 2) then {
+            if (cleanName.substringFrom(cleanName.size - 1)to(cleanName.size) == ":=") then {
+                def getter = env.findMethod("{cleanName.substringFrom(1)to(cleanName.size - 2)}(0)")
+                // Handle reassignments changing type from unknown.
+                reassignChangesType(env, cleanName, arguments, getter, targetMethod)
+            }
+        }
         return targetMethod.returnType
     }
 
@@ -495,7 +527,7 @@ class DotRequestNode(rec, meth, args, generics) {
     def name is public = "dot request"
     def receiver is public = rec
     def methodName is public = meth
-    def cleanName is public = meth.substringFrom(1)to(methodName.size - 3) // No arguments e.g. "x.foo(1)" becomes "x.foo".
+    def cleanName is public = meth.substringFrom(1)to(meth.size - 3) // No arguments e.g. in x its method "foo(1)" becomes "foo".
     def arguments is public = args
     def genericParams is public = generics // Unused currently.
 
@@ -517,6 +549,14 @@ class DotRequestNode(rec, meth, args, generics) {
         // Check the argument types match the method parameter types.
         def targetMethod = receiverType.getMethod(methodName)
         targetMethod.checkArguments(argumentTypes)
+
+        if (cleanName.size > 2) then {
+            if (cleanName.substringFrom(cleanName.size - 1)to(cleanName.size) == ":=") then {
+                def getter = receiverType.getMethod("{cleanName.substringFrom(1)to(cleanName.size - 2)}(0)")
+                // Handle reassignments changing type from unknown.
+                reassignChangesType(env, cleanName, arguments, getter, targetMethod)
+            }
+        }
         return targetMethod.returnType
     }
 
@@ -534,19 +574,27 @@ class DotRequestNode(rec, meth, args, generics) {
 }
 
 
-// Helper to add declarations for objects, methods and blocks.
+// Helper to add declarations for objects, methods and blocks. Uses three passes to work with coinduction and self.
 method addDeclarations(env, body) {
+    // Register every type before resolving any declaration that may use it.
     body.do { expr ->
-        if ((expr.name == "var declaration") || (expr.name == "def declaration") ||
-            (expr.name == "type declaration") || (expr.name == "method declaration") ||
-            (expr.name == "import statement")) then {
+        if (expr.name == "type declaration") then {
             expr.addToEnvironment(env)
         }
     }
-    // Second pass for type declarations to resolve dependencies and detect undeclared types.
+
+    // Lexically resolve type dependencies without changing their references.
     body.do { expr ->
         if (expr.name == "type declaration") then {
             env.resolveTypeDecl(expr.declaredName)
+        }
+    }
+
+    // Adds the methods and value types to the environment after the coinductive types have been lexically resolved.
+    body.do { expr ->
+        if ((expr.name == "var declaration") || (expr.name == "def declaration") ||
+            (expr.name == "method declaration") || (expr.name == "import statement")) then {
+            expr.addToEnvironment(env)
         }
     }
 }
@@ -704,8 +752,12 @@ class MethodNode(parts, rType, anns, bdy) {
 
     // Add this method expression to the current environment formatted as a NewMethod object.
     method addToEnvironment(env) {
-        // Lexically finds the return type literal.
-        def returnType = env.findType(lexicalReturnType)
+        // Lexically finds the return type literal. Special case for classes as they make a method with one body element, the class itself.
+        def returnType = if ((lexicalReturnType.name == "Unknown") && (body.size == 1)) then {
+            if (body.first.name == "object") then { body.first.inferType(env) } else { lexicalReturnType }
+        } else {
+            env.findType(lexicalReturnType)
+        }
         // CheckType already enforces all params are IdentifierNodes. Lexically finds the param types.
         def paramTypes = parameters.map { param -> env.findType(param.declaredType) }
         // Add a NewMethod object to environment.
@@ -868,6 +920,7 @@ class LineupNode(elems) {
     method inferType(env) {
         return unknownType // TODO
         // Typecheck the declared type against the common element type e.g. def x : List[[String]] = ["hi", "bye"]
+        // Has to be a type that encompasses all other types, potentially needing to be Object if incompatable like: [3, "hi"]
         // So return some lineupType representation that stores String, then var/def can compare to that generic type.
     }
 
@@ -1091,6 +1144,9 @@ class BaseEnvironment {
         // Extracting method name without parameter counts e.g. "foo" not "foo(0)"
         if (name == "lexical request") then {
             name := expr.cleanName
+        }
+        if (name == "dot request") then {
+            EnvError.raise "Cannot resolve dot request in the environment: '{expr.methodName}'"
         }
         // Gets literal for static types (Unknown, Done, Boolean, Number, String).
         if (baseTypes.containsKey(name)) then {
@@ -1510,7 +1566,7 @@ assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,c2N(l0R("if(1)then(1)"
 // def x : Number = y ++ "bye"
 assertFails(o0C(c2N(d3F("y",nil,nil,s0L("hi")),d3F("x",o1N(l0R("Number(0)",nil,nil)),nil,d0R(l0R("y(0)",nil,nil),"++(1)",o1N(s0L("bye")),nil))),nil), DefError)
 
-// TEST 73 (Should fail because they both make a method with the same name) TODO check other such cases for different method making AST like var, def, interface.
+// TEST 73 (Should fail because they both make a method with the same name)
 // def Test = object {}
 // class Test {}
 assertFails(o0C(c2N(d3F("Test",nil,nil,o0C(nil,nil)),m0D(o1N(p0T("Test",nil,nil)),nil,nil,o1N(o0C(nil,nil)))),nil), EnvError)
@@ -1589,7 +1645,7 @@ assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("S
 // var y : B := x
 assertPasses(o0C(c0N(t0D("A",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))),m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))),m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
 
-// TEST 82 (Multiple methods failure)
+// TEST 83 (Multiple methods failure)
 // type A = interface { 
 //     foo (_ : String, _ : B) -> B
 //     bar (_ : String) -> A
@@ -1598,6 +1654,31 @@ assertPasses(o0C(c0N(t0D("A",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("
 // var x : A
 // var y : B := x
 assertFails(o0C(c0N(t0D("A",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))),m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+
+// TEST 84 (vartiant, union, intersection)
+// type A = String & Number
+// type B = String + Number
+// var x : String | Number
+// var y : String & Number
+// var z : String + Number
+assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"&(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(t0D("B",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(v4R("x",o1N(d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("Number(0)",nil,nil)),nil)),nil,nil),c2N(v4R("y",o1N(d0R(l0R("String(0)",nil,nil),"&(1)",o1N(l0R("Number(0)",nil,nil)),nil)),nil,nil),v4R("z",o1N(d0R(l0R("String(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),nil,nil))))),nil))
+
+// TEST 85 (Cannot use variant in type declaration)
+// type A = String | Number
+assertFails(o0C(o1N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("Number(0)",nil,nil)),nil))),nil), EnvError)
+
+// TEST 86 (Now uses value type after reassignment even if no declared type or intiial value)
+// var test
+// test := 3
+// def z : String = test
+assertFails(o0C(c0N(v4R("test",nil,nil,nil),c2N(a5N(l0R("test(0)",nil,nil),n0M(3)),d3F("z",o1N(l0R("String(0)",nil,nil)),nil,l0R("test(0)",nil,nil)))),nil), DefError)
+
+// TEST 87 (Same as previous, but with dot requests and var z)
+// class test { var y }
+// def x = test
+// x.y := 3
+// var z : String := x.y
+assertFails(o0C(c0N(m0D(o1N(p0T("test",nil,nil)),nil,nil,o1N(o0C(o1N(v4R("y",nil,nil,nil)),nil))),c0N(d3F("x",nil,nil,l0R("test(0)",nil,nil)),c2N(a5N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil),n0M(3)),v4R("z",o1N(l0R("String(0)",nil,nil)),nil,o1N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil)))))),nil), VarError)
 
 
 

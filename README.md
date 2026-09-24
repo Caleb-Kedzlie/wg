@@ -29,8 +29,7 @@ There is some random testing in test.grace that could be deleted.
 ## Typechecking any Grace program  
 With the current commands, any program written in the file test.grace can be converted into concise and longform AST.  
 The Typechecker uses concise AST, so convert it into that form and then copy and paste it into the end of TypeChecker.grace.  
-For example with a script consisting of just the constant "3":
-It can either be standalone:  
+For example with a script consisting of just the constant "3" can either be standalone:  
 `o0C(o1N(n0M(3)),nil).checkType(Environment(BaseEnvironment), unknownType)`  
 Or as a test that prints the result and catches errors:  
 `assertPasses(o0C(o1N(n0M(3)),nil))`  
