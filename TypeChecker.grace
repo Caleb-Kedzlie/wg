@@ -1051,6 +1051,30 @@ class Environment(par) {
             if (types.containsKey(name)) then {
                 return types.at(name)
             }
+        } elseif {expr.name == "dot request"} then {
+            // Special case for exclusively the variant/union/intersection dot requests: |, & and +.
+            if (expr.methodName == "|(1)" || expr.methodName == "&(1)" || expr.methodName == "|(1)") then {
+                // Constructs a new type for either type declarations (type C = A & B) or annotations on the fly (x : A & B).
+
+                def lhs = expr.reciever
+                def rhs = expr.arguments.first
+                // Convert to clean name immediately so that "Boolean(0)" works but "false(0)" doesn't, enforcing actual type names. May throw errors.
+                def lhsType = findType(lhs.cleanName)
+                def rhsType = findType(rhs.cleanName)
+
+                def newType = AnyType("Union") // TODO Make this union/intersection/variant
+                lhsType.methods.do { sig ->
+                    // Convert method signatures into NewMethod format then add to the environment.
+                    def meth = sig.asMethod(env)
+                    newType.addMethod(meth)
+                }
+                rhsType.methods.do { sig ->
+                    // Convert method signatures into NewMethod format then add to the environment.
+                    def meth = sig.asMethod(env)
+                    newType.addMethod(meth)
+                }
+                return newType
+            }
         }
         return parent.findType(expr)
     }
@@ -1141,12 +1165,12 @@ class BaseEnvironment {
     // Find a literal type object via the name.
     method findType(expr) {
         var name := expr.name
+        if (name == "dot request") then {
+            EnvError.raise "Cannot resolve this dot request in the environment: '{expr.methodName}'"
+        }
         // Extracting method name without parameter counts e.g. "foo" not "foo(0)"
         if (name == "lexical request") then {
             name := expr.cleanName
-        }
-        if (name == "dot request") then {
-            EnvError.raise "Cannot resolve dot request in the environment: '{expr.methodName}'"
         }
         // Gets literal for static types (Unknown, Done, Boolean, Number, String).
         if (baseTypes.containsKey(name)) then {
