@@ -250,6 +250,10 @@ class AnyType(nm) {
         var result : Boolean := true
         parent.methods.do { meth ->
             result := result && block.apply(parent, subtype, meth)
+            // Optimisation to stop if it reaches an invalid subtype for an earlier parameter.
+            if (!result) then {
+                return false
+            }
         }
         return result
     }
@@ -302,9 +306,17 @@ class AnyType(nm) {
         
         // For the parent and child return types of this method, coinductively recurse on all the methods within them. Uses current trail.
         var result : Boolean := compareMethods(returnParent, returnSubtype, { p, s, n -> acceptsCoinductive(p, s, n, trail) })
+        // Optimisation to stop if it reaches an invalid subtype for return type.
+        if (!result) {
+            return false
+        }
         // Do the same coinductive recursion as the return types, but for every pair of parameter types.
         paramsParent.zip(paramsSubtype) do { par, sub ->
             result := result && compareMethods(par, sub, { p, s, n -> acceptsCoinductive(p, s, n, trail) })
+            // Optimisation to stop if it reaches an invalid subtype for a parameter-argument pair.
+            if (!result) {
+                return false
+            }
         }
         return result
     }
