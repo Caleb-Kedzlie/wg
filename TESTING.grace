@@ -198,3 +198,16 @@ class Test {}
 method Test {}
 def Test = object {}
 def Test = 3
+
+class Person(name) {
+    var personName := name
+
+    method greet {
+        // Testing if both instance and constructor variables are accessible.
+        print(name)
+        print(personName)
+    }
+}
+
+def bob = Person("bob")
+bob.greet

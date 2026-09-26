@@ -158,6 +158,25 @@ class NewMethod(nm, params, rType) {
     def paramNames = "{ params.map { p -> p.name }.join(", ") }"
     def fullName is public = "{name}({paramNames}) -> {returnType.name}"
 
+    // Checks if the two methods are identical. Compares name, args and return type. Used when making union types. 
+    method methodsMatch(otherName, argTypes, retType) {
+        if (name != otherName) then {
+            return false
+        }
+        if (paramTypes.size != argTypes.size) then {
+            return false
+        }
+        paramTypes.zip(argTypes) do { param, arg ->
+            if (!param.matches(arg)) then {
+                return false
+            }
+        }
+        if (!returnType.matches(retType)) then {
+            return false
+        }
+        return true
+    }
+
     // Check the sent args subtype the declared methods parameters.
     method argumentsSubtype(argTypes) {
         // Check the number of arguments matches the parameters.
@@ -227,7 +246,7 @@ class AnyType(nm) {
         methods.add(meth)
     }
 
-    // I want it to throw an error if a method doesn't exist usually. Only used for subtype checking.
+    // It throws an error if a method doesn't exist usually. This is used only used for subtype checking.
     method hasMethod(methName) {
         return methods.contains { meth -> meth.name == methName } 
     }
@@ -243,6 +262,11 @@ class AnyType(nm) {
     // Format name with methods for easy debugging.
     method asString {
         return "{name} ['{methods.join("', '")}']"
+    }
+
+    // Checks if the two types are identical. Used for comparing methods when making union types.
+    method matches(other) {
+        return declaredName == other.declaredName
     }
 
     // If any methods are not subtyped from parent via a certain function then return false.
@@ -307,14 +331,14 @@ class AnyType(nm) {
         // For the parent and child return types of this method, coinductively recurse on all the methods within them. Uses current trail.
         var result : Boolean := compareMethods(returnParent, returnSubtype, { p, s, n -> acceptsCoinductive(p, s, n, trail) })
         // Optimisation to stop if it reaches an invalid subtype for return type.
-        if (!result) {
+        if (!result) then {
             return false
         }
         // Do the same coinductive recursion as the return types, but for every pair of parameter types.
         paramsParent.zip(paramsSubtype) do { par, sub ->
             result := result && compareMethods(par, sub, { p, s, n -> acceptsCoinductive(p, s, n, trail) })
             // Optimisation to stop if it reaches an invalid subtype for a parameter-argument pair.
-            if (!result) {
+            if (!result) then {
                 return false
             }
         }
@@ -361,6 +385,23 @@ def unknownType = object {
     method getMethod(_) { TypeError.raise "Unknown type has no methods" }
     method inferType(_) { return self }
     method checkType(_, _) {}
+}
+
+
+class VariantType(lhs, rhs) {
+    def name is public = "Variant"
+    def declaredName is public = "{leftType.declaredName} | {rightType.declaredName}"
+    def lhsType = lhs
+    def rhsType = rhs
+    
+    // Since variants are only used for variable, param and return type annotations, only this method needs to be implemented.
+    method acceptsSubtype(subtype) {
+        // Succeeds if one or both of the types in the variant succeed. Allows nested variants such as X | Y | Z.
+        return lhsType.acceptsSubtype(subtype) || rhsType.acceptsSubtype(subtype)
+    }
+    method asString { return name }
+    method inferType(env) { TypeError.raise "Cannot infer a variant type '{declaredName}'" }
+    method checkType(env, expected) { TypeError.raise "Cannot check a variant type '{declaredName}'"  }
 }
 
 
@@ -534,7 +575,7 @@ class LexicalRequestNode(meth, args, generics) {
 }
 
 
-// Searches for a dotted method (e.g. 3.asString or x.y) by finding the reciever in this environment or search outer environments (until found or throw error).
+// Searches for a dotted method (e.g. 3.asString or x.y) by finding the receiver in this environment or search outer environments (until found or throw error).
 class DotRequestNode(rec, meth, args, generics) {
     def name is public = "dot request"
     def receiver is public = rec
@@ -868,6 +909,9 @@ class TypeNode(nm, generics, val) {
     method addToEnvironment(env) {
         // Either it gets the type representation of an interface, or it looks up an already defined type. e.g. String (or with union/intersection).
         def valueType = if (value.name == "interface declaration") then { value.asType(env) } else { env.findType(value) }
+        if (valueType.name == "Variant") then { 
+            TypeDeclError.raise "Cannot use variants (e.g. A | B) in type declarations"
+        }
         valueType.declaredName := declaredName
         env.addType(declaredName, valueType)
     }
@@ -1064,27 +1108,39 @@ class Environment(par) {
                 return types.at(name)
             }
         } elseif {expr.name == "dot request"} then {
+            def methName = expr.methodName
             // Special case for exclusively the variant/union/intersection dot requests: |, & and +.
-            if (expr.methodName == "|(1)" || expr.methodName == "&(1)" || expr.methodName == "|(1)") then {
-                // Constructs a new type for either type declarations (type C = A & B) or annotations on the fly (x : A & B).
+            if ((methName != "|(1)") && (methName != "&(1)") && (methName != "+(1)")) then {
+                EnvError.raise "Cannot use dot request in the environment: '{methName}'"
+            }
+            
+            // Constructs a new type representation for either type declarations (type C = A & B) or type annotations (x : A & B).
+            def lhs = expr.receiver
+            def rhs = expr.arguments.first
+            // Convert to clean name immediately so that "Boolean(0)" works but "false(0)" doesn't, enforcing actual type names. May throw errors.
+            def lhsType = findType(lhs)
+            def rhsType = findType(rhs)
 
-                def lhs = expr.reciever
-                def rhs = expr.arguments.first
-                // Convert to clean name immediately so that "Boolean(0)" works but "false(0)" doesn't, enforcing actual type names. May throw errors.
-                def lhsType = findType(lhs.cleanName)
-                def rhsType = findType(rhs.cleanName)
-
-                def newType = AnyType("Union") // TODO Make this union/intersection/variant
-                lhsType.methods.do { sig ->
-                    // Convert method signatures into NewMethod format then add to the environment.
-                    def meth = sig.asMethod(env)
-                    newType.addMethod(meth)
+            // Custom class to create variant types that succeed if either or are fully implemented.
+            if (methName == "|(1)") then { 
+                return VariantType(lhsType, rhsType)
+            } elseif {methName == "&(1)"} then { // Includes only methods in both.
+                def newType = AnyType("Union")
+                newType.declaredName := "{lhsType.declaredName} & {rhsType.declaredName}"
+                lhsType.methods.do { methL ->
+                    rhsType.methods.do { methR ->
+                        // Check if any methods are identical (same name, exact params & return).
+                        if (methL.methodsMatch(methR.name, methR.paramTypes, methR.returnType)) then {
+                            newType.addMethod(methL)
+                        }
+                    }
                 }
-                rhsType.methods.do { sig ->
-                    // Convert method signatures into NewMethod format then add to the environment.
-                    def meth = sig.asMethod(env)
-                    newType.addMethod(meth)
-                }
+                return newType
+            } else { // Combines all methods.
+                def newType = AnyType("Intersection")
+                newType.declaredName := "{lhsType.declaredName} + {rhsType.declaredName}"
+                lhsType.methods.do { meth -> newType.addMethod(meth) }
+                rhsType.methods.do { meth -> newType.addMethod(meth) }
                 return newType
             }
         }
@@ -1715,7 +1771,6 @@ assertFails(o0C(c0N(v4R("test",nil,nil,nil),c2N(a5N(l0R("test(0)",nil,nil),n0M(3
 // x.y := 3
 // var z : String := x.y
 assertFails(o0C(c0N(m0D(o1N(p0T("test",nil,nil)),nil,nil,o1N(o0C(o1N(v4R("y",nil,nil,nil)),nil))),c0N(d3F("x",nil,nil,l0R("test(0)",nil,nil)),c2N(a5N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil),n0M(3)),v4R("z",o1N(l0R("String(0)",nil,nil)),nil,o1N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil)))))),nil), VarError)
-
 
 
 // TEST ? put after lineups.
