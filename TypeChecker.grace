@@ -230,14 +230,10 @@ class AnyType(nm) {
         addMethod(NewMethod("==(1)", o1N(unknownType), booleanType))
         addMethod(NewMethod("!=(1)", o1N(unknownType), booleanType))
         addMethod(NewMethod("asString(0)", nil, stringType))
-        // Methods for variants, unions and intersections between types.
-        addMethod(NewMethod("|(1)", o1N(unknownType), unknownType))
-        addMethod(NewMethod("&(1)", o1N(unknownType), unknownType))
-        addMethod(NewMethod("+(1)", o1N(unknownType), unknownType))
     }
 
     // Checks if the type is an Interface or Environment (instead of just Interface, so that self can assign to a custom type).
-    method selfOrInterface -> Boolean {
+    method selfOrInterface {
         return (name == "Interface") || (name == "Environment")
     }
 
@@ -377,9 +373,11 @@ def unknownType = object {
     def declaredName is public = "Unknown"
     def methods is public = nil
 
+    method selfOrInterface { return false }
     method compareMethods(_, _, _) { return true }
     method acceptsSubtype(_) { return true }
     method asString { return name }
+    method matches(other) { return other.name == "Unknown" } 
     method addMethod(_) { TypeError.raise "Unknown type cannot add methods"}
     method hasMethod(_) { return false }
     method getMethod(_) { TypeError.raise "Unknown type has no methods" }
@@ -390,16 +388,29 @@ def unknownType = object {
 
 class VariantType(lhs, rhs) {
     def name is public = "Variant"
-    def declaredName is public = "{leftType.declaredName} | {rightType.declaredName}"
+    def declaredName is public = "{lhs.declaredName} | {rhs.declaredName}"
     def lhsType = lhs
     def rhsType = rhs
     
-    // Since variants are only used for variable, param and return type annotations, only this method needs to be implemented.
     method acceptsSubtype(subtype) {
         // Succeeds if one or both of the types in the variant succeed. Allows nested variants such as X | Y | Z.
         return lhsType.acceptsSubtype(subtype) || rhsType.acceptsSubtype(subtype)
     }
+    method selfOrInterface { return false }
+    method matches(other) { TypeError.raise "Cannot create union with variant" }
     method asString { return name }
+    method addMethod(_) { TypeError.raise "Variant type cannot add methods"}
+    method hasMethod(methName) { return lhsType.hasMethod(methName) || rhsType.hasMethod(methName) }
+    // Get a method from either of the types within the variant.
+    method getMethod(methName) { 
+        if (lhsType.hasMethod(methName)) then {
+            return lhsType.getMethod(methName)
+        } 
+        if (rhsType.hasMethod(methName)) then {
+            return rhsType.getMethod(methName)
+        }
+        TypeError.raise "Both types in variant '{declaredName}' do not have method '{methName}'"
+    }
     method inferType(env) { TypeError.raise "Cannot infer a variant type '{declaredName}'" }
     method checkType(env, expected) { TypeError.raise "Cannot check a variant type '{declaredName}'"  }
 }
@@ -914,6 +925,10 @@ class TypeNode(nm, generics, val) {
         }
         valueType.declaredName := declaredName
         env.addType(declaredName, valueType)
+
+        // Getter for the type so "type A = B" works.
+        def meth = NewMethod(declaredName ++ "(0)", nil, valueType)
+        env.addMethod(meth)
     }
 }
 
@@ -1233,9 +1248,6 @@ class BaseEnvironment {
     // Find a literal type object via the name.
     method findType(expr) {
         var name := expr.name
-        if (name == "dot request") then {
-            EnvError.raise "Cannot resolve this dot request in the environment: '{expr.methodName}'"
-        }
         // Extracting method name without parameter counts e.g. "foo" not "foo(0)"
         if (name == "lexical request") then {
             name := expr.cleanName
@@ -1503,7 +1515,7 @@ assertPasses(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",ni
 // TEST 48
 // def x = { a -> a + 1 }
 // x.apply("test")
-assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(s0L("test")),nil)),nil))
+assertPasses(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(s0L("test")),nil)),nil))
 
 // TEST 49
 // def x : String = {a -> a}
@@ -1757,7 +1769,7 @@ assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"&(1)",o1N(l0R("Nu
 
 // TEST 85 (Cannot use variant in type declaration)
 // type A = String | Number
-assertFails(o0C(o1N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("Number(0)",nil,nil)),nil))),nil), EnvError)
+assertFails(o0C(o1N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("Number(0)",nil,nil)),nil))),nil), TypeDeclError)
 
 // TEST 86 (Now uses value type after reassignment even if no declared type or intiial value)
 // var test
