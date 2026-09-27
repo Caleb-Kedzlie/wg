@@ -1221,7 +1221,7 @@ class Environment(par) {
 class BaseEnvironment {
     def baseTypes = collections.dictionary ["Unknown" :: unknownType, "Done" :: doneType, 
                         "Boolean" :: booleanType, "Number" :: numberType, "String" :: stringType, 
-                        "Action" :: unknownType]
+                        "Action" :: arglessBlockType]
     def standardMethods = collections.dictionary ["print(1)" :: NewMethod("print(1)", o1N(unknownType), doneType),
                     "false(0)" :: arglessMeth("false(0)", booleanType), 
                     "true(0)" :: arglessMeth("true(0)", booleanType),
@@ -1301,7 +1301,7 @@ class BaseEnvironment {
 print("\n-----Tests-----")
 var testNumber := 1 // Increments after each test.
 var succeededTests := 0 // Increments each success to print out of total.
-def onlyPrintFails = true
+def onlyPrintFails = false
 
 // Default error is TypeError, but specific errors can be checked to ensure the correct node threw the error.
 method assertFails(ast) {
@@ -1850,7 +1850,66 @@ assertFails(o0C(c0N(v4R("left",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),c2
 // TEST 92 (Complex test in file: sample.grace)
 assertPasses(o0C(c0N(i0M("ast",i0D("ast",nil)),c0N(c0M(" This file makes use of many AST nodes"),c2N(d3F("x",nil,nil,o0C(c2N(v4R("y",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),m0D(c2N(p0T("foo",o1N(i0D("arg",o1N(l0R("Action(0)",nil,nil)))),nil),p0T("bar",o1N(i0D("n",nil)),nil)),o1N(l0R("String(0)",nil,nil)),nil,c2N(a5N(d0R(l0R("self(0)",nil,nil),"y(0)",nil,nil),d0R(d0R(l0R("arg(0)",nil,nil),"apply(0)",nil,nil),"+(1)",o1N(l0R("n(0)",nil,nil)),nil)),r3T(i0S(s4F("y ",c9A," "),l0R("y(0)",nil,nil),s0L(s4F("",c9E,""))))))),nil)),l0R("print(1)",o1N(d0R(l0R("x(0)",nil,nil),"foo(1)bar(1)",c2N(b1K(nil,o1N(n0M(2))),n0M(3)),nil)),nil)))),nil))
 
-// TEST 93 (Benchmark test with many types)
+// TEST 93 (Benchmark tests with many types)
+// type A = Number & Boolean
+// type B = String + Number & A
+// type C = A & B
+// type LeftA = interface { next(_ : LeftB) -> LeftB }
+// type LeftB = interface { next(_ : LeftC) -> LeftC }
+// type LeftC = interface { next(_ : LeftD) -> LeftD }
+// type LeftD = interface { next(_ : LeftE) -> LeftE }
+// type LeftE = interface { next(_ : LeftF) -> LeftF }
+// type LeftF = interface { next(_ : LeftG) -> LeftG }
+// type LeftG = interface { next(_ : LeftH) -> LeftH }
+// type LeftH = interface { next(_ : LeftA) -> LeftA }
+// type RightA = interface { next(_ : RightB) -> RightB }
+// type RightB = interface { next(_ : RightC) -> RightC }
+// type RightC = interface { next(_ : RightD) -> RightD }
+// type RightD = interface { next(_ : RightE) -> RightE }
+// type RightE = interface { next(_ : RightF) -> RightF }
+// type RightF = interface { next(_ : RightG) -> RightG }
+// type RightG = interface { next(_ : RightH) -> RightH }
+// type RightH = interface { next(_ : RightA) -> RightA }
+// var x : LeftA
+// var y: RightA := x
+assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("Boolean(0)",nil,nil)),nil)),c0N(t0D("B",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("A(0)",nil,nil)),nil)),nil)),c0N(t0D("C",nil,d0R(l0R("A(0)",nil,nil),"&(1)",o1N(l0R("B(0)",nil,nil)),nil)),c0N(t0D("LeftA",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("LeftB(0)",nil,nil)))),nil)),o1N(l0R("LeftB(0)",nil,nil)))))),c0N(t0D("LeftB",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("LeftC(0)",nil,nil)))),nil)),o1N(l0R("LeftC(0)",nil,nil)))))),c0N(t0D("LeftC",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("LeftD(0)",nil,nil)))),nil)),o1N(l0R("LeftD(0)",nil,nil)))))),c0N(t0D("LeftD",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("LeftE(0)",nil,nil)))),nil)),o1N(l0R("LeftE(0)",nil,nil)))))),c0N(t0D("LeftE",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("LeftF(0)",nil,nil)))),nil)),o1N(l0R("LeftF(0)",nil,nil)))))),c0N(t0D("LeftF",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("LeftG(0)",nil,nil)))),nil)),o1N(l0R("LeftG(0)",nil,nil)))))),c0N(t0D("LeftG",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("LeftH(0)",nil,nil)))),nil)),o1N(l0R("LeftH(0)",nil,nil)))))),c0N(t0D("LeftH",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("LeftA(0)",nil,nil)))),nil)),o1N(l0R("LeftA(0)",nil,nil)))))),c0N(t0D("RightA",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("RightB(0)",nil,nil)))),nil)),o1N(l0R("RightB(0)",nil,nil)))))),c0N(t0D("RightB",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("RightC(0)",nil,nil)))),nil)),o1N(l0R("RightC(0)",nil,nil)))))),c0N(t0D("RightC",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("RightD(0)",nil,nil)))),nil)),o1N(l0R("RightD(0)",nil,nil)))))),c0N(t0D("RightD",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("RightE(0)",nil,nil)))),nil)),o1N(l0R("RightE(0)",nil,nil)))))),c0N(t0D("RightE",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("RightF(0)",nil,nil)))),nil)),o1N(l0R("RightF(0)",nil,nil)))))),c0N(t0D("RightF",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("RightG(0)",nil,nil)))),nil)),o1N(l0R("RightG(0)",nil,nil)))))),c0N(t0D("RightG",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("RightH(0)",nil,nil)))),nil)),o1N(l0R("RightH(0)",nil,nil)))))),c0N(t0D("RightH",nil,i0C(o1N(m0S(o1N(p0T("next",o1N(i0D("_",o1N(l0R("RightA(0)",nil,nil)))),nil)),o1N(l0R("RightA(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("LeftA(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("RightA(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil))))))))))))))))))))))),nil))
+
+// TEST 94 (Another benchmark test)
+// type A = String & Number & Boolean
+// type B = String + Number & A
+// type C = A & B
+// type D = interface { foo(_ : E | H) -> D }
+// type E = interface { foo(_ : F) -> B }
+// type F = interface { bar(_ : D, _ : E, _ : G | E) -> F }
+// type G = interface { bar(_ : H, _ : D, _ : C | A) -> H }
+// type H = interface { bar(_ : I, _ : E | F, _ : G) -> F }
+// type I = interface { bar(_ : D, _ : F, _ : H) -> G }
+// type J = D + D
+// type K = interface { 
+//     test1(_ : K, _ : K, _ : K,  _ : K, _ : K, _ : K, _ : K, _ : K) -> K
+//     test2(_ : K, _ : K, _ : K,  _ : K, _ : K, _ : K, _ : K, _ : K) -> K
+//     test3(_ : K, _ : K, _ : K,  _ : K, _ : K, _ : K, _ : K, _ : K) -> K 
+//     test4(_ : K, _ : K, _ : K,  _ : K, _ : K, _ : K, _ : K, _ : K) -> K 
+// }
+// type KMore = K + Number
+// type KLess = K & C
+// var x : A
+// var y : C := x
+// var z : D
+// var a : J := z
+// var k : K
+// def k2 : KLess = k
+// var k3 : KMore
+// def k4 : K = k3
+// def k4 : KLess = k3
+assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"&(1)",o1N(d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("Boolean(0)",nil,nil)),nil)),nil)),c0N(t0D("B",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("A(0)",nil,nil)),nil)),nil)),c0N(t0D("C",nil,d0R(l0R("A(0)",nil,nil),"&(1)",o1N(l0R("B(0)",nil,nil)),nil)),c0N(t0D("D",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(d0R(l0R("E(0)",nil,nil),"|(1)",o1N(l0R("H(0)",nil,nil)),nil)))),nil)),o1N(l0R("D(0)",nil,nil)))))),c0N(t0D("E",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("F(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("F",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("D(0)",nil,nil))),c2N(i0D("_",o1N(l0R("E(0)",nil,nil))),i0D("_",o1N(d0R(l0R("G(0)",nil,nil),"|(1)",o1N(l0R("E(0)",nil,nil)),nil))))),nil)),o1N(l0R("F(0)",nil,nil)))))),c0N(t0D("G",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("H(0)",nil,nil))),c2N(i0D("_",o1N(l0R("D(0)",nil,nil))),i0D("_",o1N(d0R(l0R("C(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil))))),nil)),o1N(l0R("H(0)",nil,nil)))))),c0N(t0D("H",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("I(0)",nil,nil))),c2N(i0D("_",o1N(d0R(l0R("E(0)",nil,nil),"|(1)",o1N(l0R("F(0)",nil,nil)),nil))),i0D("_",o1N(l0R("G(0)",nil,nil))))),nil)),o1N(l0R("F(0)",nil,nil)))))),c0N(t0D("I",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("D(0)",nil,nil))),c2N(i0D("_",o1N(l0R("F(0)",nil,nil))),i0D("_",o1N(l0R("H(0)",nil,nil))))),nil)),o1N(l0R("G(0)",nil,nil)))))),c0N(t0D("J",nil,d0R(l0R("D(0)",nil,nil),"+(1)",o1N(l0R("D(0)",nil,nil)),nil)),c0N(t0D("K",nil,i0C(c0N(m0S(o1N(p0T("test1",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil))),c0N(m0S(o1N(p0T("test2",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil))),c2N(m0S(o1N(p0T("test3",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil))),m0S(o1N(p0T("test4",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil)))))))),c0N(t0D("KMore",nil,d0R(l0R("K(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(t0D("KLess",nil,d0R(l0R("K(0)",nil,nil),"&(1)",o1N(l0R("C(0)",nil,nil)),nil)),c0N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),c0N(v4R("y",o1N(l0R("C(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil))),c0N(v4R("z",o1N(l0R("D(0)",nil,nil)),nil,nil),c0N(v4R("a",o1N(l0R("J(0)",nil,nil)),nil,o1N(l0R("z(0)",nil,nil))),c0N(v4R("k",o1N(l0R("K(0)",nil,nil)),nil,nil),c0N(d3F("k2",o1N(l0R("KLess(0)",nil,nil)),nil,l0R("k(0)",nil,nil)),c0N(v4R("k3",o1N(l0R("KMore(0)",nil,nil)),nil,nil),c2N(d3F("k4",o1N(l0R("K(0)",nil,nil)),nil,l0R("k3(0)",nil,nil)),d3F("k4",o1N(l0R("KLess(0)",nil,nil)),nil,l0R("k3(0)",nil,nil))))))))))))))))))))))),nil))
+
+// TEST 95 (Simplified counterexample of previous test, fails as K doesn't subtype KMore)
+// type K = interface { test1(_ : K, _ : K, _ : K,  _ : K, _ : K, _ : K, _ : K, _ : K) -> K }
+// type KMore = K + Number
+// var k : K
+// def k2 : KMore = k
+assertFails(o0C(c0N(t0D("K",nil,i0C(o1N(m0S(o1N(p0T("test1",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil)))))),c0N(t0D("KMore",nil,d0R(l0R("K(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c2N(v4R("k",o1N(l0R("K(0)",nil,nil)),nil,nil),d3F("k2",o1N(l0R("KMore(0)",nil,nil)),nil,l0R("k(0)",nil,nil))))),nil), DefError)
 
 
 // TEST ? put after lineups.
