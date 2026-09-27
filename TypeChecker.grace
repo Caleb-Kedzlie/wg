@@ -25,7 +25,7 @@ def EnvError = TypeError.refine "EnvError"
 
 // Special toggle for whether it uses the value type when undeclared. May mistakenly flag when reassigned in a conditional block (loop/if statement).
 // e.g. (var x = 3; x := "hi", var y : Number : x) either passes with unknownType, or fails by comparing string value to declared number.
-def checkValueIfUndeclared = true // False will miss some failing cases (false negatives), but wont have as many incorrect errors (false positives).
+def checkValueIfUndeclared = false // False will miss some failing cases (false negatives), but wont have as many incorrect errors from unconditional blocks (false positives).
 
 
 //
@@ -628,10 +628,6 @@ class DotRequestNode(rec, meth, args, generics) {
         if ((receiverType.name == "Import") || (receiverType.name == "Unknown")) then {
             return unknownType
         }
-        // Variant, union and intersection are handled in environment findType not here.
-        if ((methodName == "|(1)") || (methodName == "&(1)") || ((methodName == "+(1)") && (receiverType.name != "Number"))) then { // Small hack so that number can still use "+"
-            return unknownType
-        }
         def argumentTypes = arguments.map { a -> 
             a.inferType(env)
         }
@@ -938,7 +934,11 @@ class TypeNode(nm, generics, val) {
         if (value.name == "Unknown") then {
             TypeDeclError.raise "{name} needs initial value"
         }
-        value.checkType(env, unknownType) // Typecheck the value (typically an interface).
+        if (value.name == "interface declaration") then {
+            value.checkType(env, unknownType)
+        } else {
+            env.findType(value)
+        }
 
         def actual = self.inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
@@ -1220,7 +1220,8 @@ class Environment(par) {
 // The base environment/scope of the script with no variables/methods, but can resolve basic types.
 class BaseEnvironment {
     def baseTypes = collections.dictionary ["Unknown" :: unknownType, "Done" :: doneType, 
-                        "Boolean" :: booleanType, "Number" :: numberType, "String" :: stringType]
+                        "Boolean" :: booleanType, "Number" :: numberType, "String" :: stringType, 
+                        "Action" :: unknownType]
     def standardMethods = collections.dictionary ["print(1)" :: NewMethod("print(1)", o1N(unknownType), doneType),
                     "false(0)" :: arglessMeth("false(0)", booleanType), 
                     "true(0)" :: arglessMeth("true(0)", booleanType),
@@ -1502,8 +1503,8 @@ assertPasses(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil)
 assertPasses(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil),p0T("when",o1N(i0D("z",o1N(l0R("Boolean(0)",nil,nil)))),nil)),nil,nil,o1N(i0S("x: ",l0R("x(0)",nil,nil),i0S(", y: ",l0R("y(0)",nil,nil),i0S(", z: ",l0R("z(0)",nil,nil),s0L(""))))))),nil))
 
 // TEST 37
-// method test(x : String, y: Number) when(z : Boolean) { x+y+z }
-assertFails(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil),p0T("when",o1N(i0D("z",o1N(l0R("Boolean(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil),"+(1)",o1N(l0R("z(0)",nil,nil)),nil)))),nil), DotReqError)
+// method test(x: Number) when(y : Boolean) { x+y }
+assertFails(o0C(o1N(m0D(c2N(p0T("test",o1N(i0D("x",o1N(l0R("Number(0)",nil,nil)))),nil),p0T("when",o1N(i0D("y",o1N(l0R("Boolean(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil)))),nil), MethodError)
 
 // TEST 38
 // method test(x : String, y: Number) { x * y }
@@ -1821,6 +1822,36 @@ assertFails(o0C(c0N(v4R("test",nil,nil,nil),c2N(a5N(l0R("test(0)",nil,nil),n0M(3
 // var z : String := x.y
 assertFails(o0C(c0N(m0D(o1N(p0T("test",nil,nil)),nil,nil,o1N(o0C(o1N(v4R("y",nil,nil,nil)),nil))),c0N(d3F("x",nil,nil,l0R("test(0)",nil,nil)),c2N(a5N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil),n0M(3)),v4R("z",o1N(l0R("String(0)",nil,nil)),nil,o1N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil)))))),nil), VarError)
 
+// TEST 88 (Test 86 but with unconditional block causing false positive).
+// var test
+// if (true) then { test := 3 } else { test := "Never assigned" }
+// def z : String = test
+assertFails(o0C(c0N(v4R("test",nil,nil,nil),c2N(l0R("if(1)then(1)else(1)",c0N(l0R("true(0)",nil,nil),c2N(b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),n0M(3)))),b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),s0L("Never assigned")))))),nil),d3F("z",o1N(l0R("String(0)",nil,nil)),nil,l0R("test(0)",nil,nil)))),nil), DefError)
+
+// TEST 89 (Flipped conditional)
+// var test
+// if (true) then { test := "Never assigned" } else { test := 3 }
+// def z : String = test
+assertFails(o0C(c0N(v4R("test",nil,nil,nil),c2N(l0R("if(1)then(1)else(1)",c0N(l0R("true(0)",nil,nil),c2N(b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),s0L("Never assigned")))),b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),n0M(3)))))),nil),d3F("z",o1N(l0R("String(0)",nil,nil)),nil,l0R("test(0)",nil,nil)))),nil), DefError)
+
+// TEST 90 (Test 87 but with unconditional block causing false positive).
+// class test { var y }
+// def x = test
+// if (true) then { x.y := 3 } else { x.y := "Never assigned" }
+// var z : String := x.y
+assertFails(o0C(c0N(m0D(o1N(p0T("test",nil,nil)),nil,nil,o1N(o0C(o1N(v4R("y",nil,nil,nil)),nil))),c0N(d3F("x",nil,nil,l0R("test(0)",nil,nil)),c2N(l0R("if(1)then(1)else(1)",c0N(l0R("true(0)",nil,nil),c2N(b1K(nil,o1N(a5N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil),n0M(3)))),b1K(nil,o1N(a5N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil),s0L("Never assigned")))))),nil),v4R("z",o1N(l0R("String(0)",nil,nil)),nil,o1N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil)))))),nil), VarError)
+
+// TEST 91 Number-typed variables use numeric +, not type intersection.
+// var left : Number := 1
+// var right : Number := 2
+// var sum : String := left + right
+assertFails(o0C(c0N(v4R("left",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),c2N(v4R("right",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(2))),v4R("sum",o1N(l0R("String(0)",nil,nil)),nil,o1N(d0R(l0R("left(0)",nil,nil),"+(1)",o1N(l0R("right(0)",nil,nil)),nil))))),nil), VarError)
+
+// TEST 92 (Complex test in file: sample.grace)
+assertPasses(o0C(c0N(i0M("ast",i0D("ast",nil)),c0N(c0M(" This file makes use of many AST nodes"),c2N(d3F("x",nil,nil,o0C(c2N(v4R("y",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),m0D(c2N(p0T("foo",o1N(i0D("arg",o1N(l0R("Action(0)",nil,nil)))),nil),p0T("bar",o1N(i0D("n",nil)),nil)),o1N(l0R("String(0)",nil,nil)),nil,c2N(a5N(d0R(l0R("self(0)",nil,nil),"y(0)",nil,nil),d0R(d0R(l0R("arg(0)",nil,nil),"apply(0)",nil,nil),"+(1)",o1N(l0R("n(0)",nil,nil)),nil)),r3T(i0S(s4F("y ",c9A," "),l0R("y(0)",nil,nil),s0L(s4F("",c9E,""))))))),nil)),l0R("print(1)",o1N(d0R(l0R("x(0)",nil,nil),"foo(1)bar(1)",c2N(b1K(nil,o1N(n0M(2))),n0M(3)),nil)),nil)))),nil))
+
+// TEST 93 (Benchmark test with many types)
+
 
 // TEST ? put after lineups.
 // def x = { a -> a + 1 }
@@ -1831,7 +1862,7 @@ assertFails(o0C(c0N(m0D(o1N(p0T("test",nil,nil)),nil,nil,o1N(o0C(o1N(v4R("y",nil
 // ["test", 2, "yes"].map { e -> x.apply(e) }
 // assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0N(c0N(s0L("test"),c2N(n0M(2),s0L("yes")))),"map(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
 
-// TEST ?
+// TEST ? put after blocks on lineups.
 // def x = { a -> print(a + 1) }
 // [1, 2, 3].do { e -> x.apply(e) }
 // assertPasses(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("print(1)",o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)),nil)))),d0R(l0N(c0N(n0M(1),c2N(n0M(2),n0M(3)))),"do(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
@@ -1840,17 +1871,10 @@ assertFails(o0C(c0N(m0D(o1N(p0T("test",nil,nil)),nil,nil,o1N(o0C(o1N(v4R("y",nil
 // ["test", 2, "yes"].do { e -> x.apply(e) }
 // assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("print(1)",o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)),nil)))),d0R(l0N(c0N(s0L("test"),c2N(n0M(2),s0L("yes")))),"do(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
 
-
 // TEST ?
 // def x = { a -> a + 1 }
 // x.apply(["test", "str"])
 // assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0N(c2N(s0L("test"),s0L("str")))),nil)),nil))
-
-
-// Complex test in file: sample.grace
-// assertPasses(o0C(c0N(i0M("ast",i0D("ast",nil)),c0N(c0M(" This file makes use of many AST nodes"),c2N(d3F("x",nil,nil,o0C(c2N(v4R("y",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),m0D(c2N(p0T("foo",o1N(i0D("arg",o1N(l0R("Action(0)",nil,nil)))),nil),p0T("bar",o1N(i0D("n",nil)),nil)),o1N(l0R("String(0)",nil,nil)),nil,c2N(a5N(d0R(l0R("self(0)",nil,nil),"y(0)",nil,nil),d0R(d0R(l0R("arg(0)",nil,nil),"apply(0)",nil,nil),"+(1)",o1N(l0R("n(0)",nil,nil)),nil)),r3T(i0S(s4F("y ",c9A," "),l0R("y(0)",nil,nil),s0L(s4F("",c9E,""))))))),nil)),l0R("print(1)",o1N(d0R(l0R("x(0)",nil,nil),"foo(1)bar(1)",c2N(b1K(nil,o1N(n0M(2))),n0M(3)),nil)),nil)))),nil))
-
-// TODO make more longer tests.
 
 
 // Print summary
