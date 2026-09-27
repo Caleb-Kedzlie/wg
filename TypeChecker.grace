@@ -23,6 +23,11 @@ def TypeDeclError = TypeError.refine "TypeDeclError"
 def EnvError = TypeError.refine "EnvError"
 
 
+// Special toggle for whether it uses the value type when undeclared. May mistakenly flag when reassigned in a conditional block (loop/if statement).
+// e.g. (var x = 3; x := "hi", var y : Number : x) either passes with unknownType, or fails by comparing string value to declared number.
+def checkValueIfUndeclared = true // False will miss some failing cases (false negatives), but wont have as many incorrect errors (false positives).
+
+
 //
 // #### AST METHODS ####  
 // TODO: the annotations/generics parameters in many of these nodes are unused. It is an advanced feature and my focus is on completing structural typing and then generics, so it may not be completed.
@@ -201,7 +206,6 @@ class NewMethod(nm, params, rType) {
     }
 
     method asString {
-        // TODO I want this nice format but it makes some tests fail?
         return "{name}->{returnType.declaredName}"
     }
 }
@@ -237,9 +241,11 @@ class AnyType(nm) {
         return (name == "Interface") || (name == "Environment")
     }
 
-    // Add a method to the methods list.
+    // Add a method to the methods list (if not already matching to prevent duplicate methods created by setupmethods).
     method addMethod(meth) {
-        methods.add(meth)
+        if (!methods.contains { m -> m.fullName == meth.fullName}) then {
+            methods.add(meth)
+        }
     }
 
     // It throws an error if a method doesn't exist usually. This is used only used for subtype checking.
@@ -285,19 +291,14 @@ class AnyType(nm) {
     }
 
     // Compare another type with this type accounting for possible coinductive relationships (interacting infinte dependencies).
-    method acceptsCoinductive(parent, subtype, meth, prevTrail) { // TODO send a list copy as parameter so it doesn't see other branches.
-        // TODO check if the unknown checking here is correct. I want the parent == subtype to stay, because if they are the same type, no need to use coinduction.
+    method acceptsCoinductive(parent, subtype, meth, prevTrail) {
         if ((subtype.name == "Unknown") || (parent.name == "Unknown") || (parent == subtype)) then {
             return true
         }
 
-        // Neither are custom types, fallback to base subtype comparison for all methods. Recursion lets this get checked at any point.
-        if (!subtype.selfOrInterface && !parent.selfOrInterface) then {
+        // If at least one one is not custom type, fallback to base subtype comparison for all methods. Recursion lets this get checked at any point.
+        if (!subtype.selfOrInterface || !parent.selfOrInterface) then {
             return compareMethods(parent, subtype, { p, s, n -> acceptsBase(p, s, n) })
-        }
-        // If one is not an interface but the other one is, it is not a coinductive or a normal subtype as the structures differ.
-        if (!(subtype.selfOrInterface && parent.selfOrInterface)) then {
-            return false
         }
 
         // Copy the trail so it does not mutate other branches.
@@ -386,6 +387,30 @@ def unknownType = object {
 }
 
 
+// Undeclared type to be distinguished, so it can reassign with new type. e.g (var x := 1; x := "hi") then typecheck it.
+class UndeclaredType(val) {
+    def name is public = "Undeclared"
+    def declaredName is public = val.declaredName
+    def value = val
+    
+    // The implementation is to completely act like it is using the value. The only difference is the name is "Undeclared".
+    method acceptsSubtype(subtype) { 
+        // Toggle for whether to actually check the set value.
+        if (checkValueIfUndeclared) then { 
+            return value.acceptsSubtype(subtype) 
+        }
+        return true
+    }
+    method selfOrInterface { return value.selfOrInterface }
+    method matches(other) { return value.matches(other) }
+    method asString { return "Undeclared:{value.asString}" }
+    method addMethod(meth) { value.addMethod(meth) }
+    method hasMethod(methName) { return value.hasMethod(methName) }
+    method getMethod(methName) { return value.getMethod(methName) }
+}
+
+
+// Variant between two types that can match either of them. e.g. (x : String | Boolean)
 class VariantType(lhs, rhs) {
     def name is public = "Variant"
     def declaredName is public = "{lhs.declaredName} | {rhs.declaredName}"
@@ -411,8 +436,6 @@ class VariantType(lhs, rhs) {
         }
         TypeError.raise "Both types in variant '{declaredName}' do not have method '{methName}'"
     }
-    method inferType(env) { TypeError.raise "Cannot infer a variant type '{declaredName}'" }
-    method checkType(env, expected) { TypeError.raise "Cannot check a variant type '{declaredName}'"  }
 }
 
 
@@ -522,7 +545,7 @@ class VarNode(nm, decType, annotations, val) {
 
     method addToEnvironment(env) {
         // If there is no declared type, use the inferred value instead.
-        def varType = if (declaredType.name == "Unknown") then { value.inferType(env) } else { env.findType(declaredType) }
+        def varType = if (declaredType.name == "Unknown") then { UndeclaredType(value.inferType(env)) } else { env.findType(declaredType) }
         // Get and assign for the variable i.e. "x" or "x()", and "x := 3"
         def meth = NewMethod(declaredName ++ "(0)", nil, varType)
         def methAssign = NewMethod(declaredName ++ ":=(1)", o1N(varType), doneType)
@@ -537,11 +560,14 @@ method reassignChangesType(env, cleanName, args, getter, setter) {
     if (args.size != 1) then {
         LexicalReqError.raise "A reassignment lexical request must take 1 argument"
     }
-    def argType = args.first.inferType(env)
-    // If it initially was unknown, make getter and setter now use the argument type (which could still be unknown).
-    if (getter.returnType.name == "Unknown") then {
-        getter.returnType := argType
-        setter.paramTypes := o1N(argType)
+    // Toggle defined at the start of the script to tradeoff false positives for false negatives.
+    if (checkValueIfUndeclared) then {
+        def argType = UndeclaredType(args.first.inferType(env))
+        // If it initially was undeclared, make getter and setter now use the argument type.
+        if (getter.returnType.name == "Undeclared") then {
+            getter.returnType := argType
+            setter.paramTypes := o1N(argType)
+        }
     }
 }
 
@@ -600,6 +626,10 @@ class DotRequestNode(rec, meth, args, generics) {
         def receiverType = receiver.inferType(env)
         // If it is an imported type, it is unknown whether the method exists or what it returns.
         if ((receiverType.name == "Import") || (receiverType.name == "Unknown")) then {
+            return unknownType
+        }
+        // Variant, union and intersection are handled in environment findType not here.
+        if ((methodName == "|(1)") || (methodName == "&(1)") || ((methodName == "+(1)") && (receiverType.name != "Number"))) then { // Small hack so that number can still use "+"
             return unknownType
         }
         def argumentTypes = arguments.map { a -> 
@@ -996,7 +1026,6 @@ class LineupNode(elems) {
     }
 
     method checkType(env, expected) {
-        // TODO
         // LineupError.raise ""
     }
 }
@@ -1104,9 +1133,7 @@ class Environment(par) {
 
     // Add a type declaration.
     method addType(nm, val) {
-        // TODO could recursively lookup types. And check matching method names for conflicts as well.
-        // while loop parent.parent types.containsKey
-
+        // Check matching method names for conflicts as well.
         if (types.containsKey(nm)) then {
             EnvError.raise "Same name {nm} used for a type declaration already"
         }
@@ -1206,7 +1233,6 @@ class BaseEnvironment {
                     "if(1)then(1)elseif(1)then(1)elseif(1)then(1)else(1)" :: createIfElse(2, true)] 
     // TODO - could make generic function if method name starts with "if(1)then(1)" then it looks for 0+ "elseif(1)then(1)"* and optional "else(1)" at end.
     //      -  "for(1)do(1)" Takes a lineup and block. Perhaps those could be specific types instead of unknownType.
-    //      -  A block needs to have an apply method. It could be unknown for now, or eventually setup generics and structural typing to work with it.
 
     // Helper to make standard library if/elseif/else cases.
     method createIfElse(elseifCount : Number, hasElse : Boolean) is private {
@@ -1233,6 +1259,12 @@ class BaseEnvironment {
         // Lookup standard library methods.
         if (standardMethods.containsKey(name)) then {
             return standardMethods.at(name)
+        }
+        // Getter for types such as "String(0)".
+        def typeName = name.substringFrom(1)to(name.size - 3)
+        if (baseTypes.containsKey(typeName)) then {
+            def baseType = baseTypes.at(typeName)
+            return NewMethod("{baseType.declaredName}(0)", nil, baseType)
         }
         EnvError.raise "No method called '{name}' in scope"
     }
@@ -1268,6 +1300,7 @@ class BaseEnvironment {
 print("\n-----Tests-----")
 var testNumber := 1 // Increments after each test.
 var succeededTests := 0 // Increments each success to print out of total.
+def onlyPrintFails = true
 
 // Default error is TypeError, but specific errors can be checked to ensure the correct node threw the error.
 method assertFails(ast) {
@@ -1280,7 +1313,9 @@ method assertFails(ast, error) {
         ast.checkType(Environment(BaseEnvironment), unknownType)
         FailedError.raise "No '{error}' thrown"
     } catch { e : error ->
-        print "(AF) PASSED: Test{testNumber} successfully threw -> {e}"
+        if (!onlyPrintFails) then {
+            print "(AF) PASSED: Test{testNumber} successfully threw -> {e}"
+        }
         succeededTests := succeededTests + 1
     } catch { e : FailedError ->
         print "(AF) -FAILED-: Test{testNumber} did not throw any error"
@@ -1295,7 +1330,9 @@ method assertFails(ast, error) {
 method assertPasses(ast) {
     try {
         ast.checkType(Environment(BaseEnvironment), unknownType)
-        print "(AP) PASSED: Test{testNumber} did not throw 'TypeError'"
+        if (!onlyPrintFails) then {
+            print "(AP) PASSED: Test{testNumber} did not throw 'TypeError'"
+        }
         succeededTests := succeededTests + 1
     } catch { e : TypeError ->
         print "(AP) -FAILED-: Test{testNumber} unexpectedly threw -> {e}"
@@ -1469,8 +1506,8 @@ assertPasses(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil)
 assertFails(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil),p0T("when",o1N(i0D("z",o1N(l0R("Boolean(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil),"+(1)",o1N(l0R("z(0)",nil,nil)),nil)))),nil), DotReqError)
 
 // TEST 38
-// method test(x : String, y: Number) { x + y }
-assertFails(o0C(o1N(m0D(o1N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil)))),nil), DotReqError)
+// method test(x : String, y: Number) { x * y }
+assertFails(o0C(o1N(m0D(o1N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(l0R("x(0)",nil,nil),"*(1)",o1N(l0R("y(0)",nil,nil)),nil)))),nil), DotReqError)
 
 // TEST 39
 // method test(x : String, y: Number) { print(x)
@@ -1600,7 +1637,7 @@ assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("Str
 // def b : B = a
 assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("C(0)",nil,nil)))))),c0N(t0D("C",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("D(0)",nil,nil)))))),c0N(t0D("D",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("a",o1N(l0R("A(0)",nil,nil)),nil,nil),d3F("b",o1N(l0R("B(0)",nil,nil)),nil,l0R("a(0)",nil,nil))))))),nil))
 
-// TEST 62 (Refined subtype) TODO gives dot request error because '|' operator does not exist.
+// TEST 62 (Refined subtype)
 // type A = interface { foo -> A }
 // type B = interface { foo -> B }
 // type X = interface { bar(_ : String) }
