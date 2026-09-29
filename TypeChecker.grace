@@ -24,10 +24,11 @@ def EnvError = TypeError.refine "EnvError"
 
 
 // Special toggle for whether it uses the value type when undeclared. May mistakenly flag when reassigned in a conditional block (loop/if statement).
-// e.g. (var x = 3; x := "hi", var y : Number : x) either passes with unknownType, or fails by comparing string value to declared number.
-def checkValueIfUndeclared = false // False will miss some failing cases (false negatives), but wont have as many incorrect errors from unconditional blocks (false positives).
+// e.g. (var x = 3; x := "hi", var y : Number := x) either passes with unknownType, or fails by comparing string value to declared number.
+// False will miss some failing cases (false negatives), but wont have as many incorrect errors from unconditional blocks (false positives).
+def checkValueIfUndeclared = false 
 // Toggle to only print failed tests to be easier to compare different runs.
-def onlyPrintFails = true
+def onlyPrintFails = false
 
 //
 // #### AST METHODS ####  
@@ -244,7 +245,10 @@ class AnyType(nm) {
         // Methods that all basic types have (excluding done).
         addMethod(NewMethod("==(1)", o1N(unknownType), booleanType))
         addMethod(NewMethod("!=(1)", o1N(unknownType), booleanType))
+        addMethod(NewMethod("hash(0)", nil, numberType))
         addMethod(NewMethod("asString(0)", nil, stringType))
+        addMethod(NewMethod("asDebugString(0)", nil, stringType))
+        // TODO Methods match(1) and ::(1) are currently not able to be handled as they return MatchResult and Binding.
     }
 
     // Checks if the type is an Interface or Environment (instead of just Interface, so that self can assign to a custom type).
@@ -252,7 +256,7 @@ class AnyType(nm) {
         return (name == "Interface") || (name == "Environment")
     }
 
-    // Add a method to the methods list (if not already matching to prevent duplicate methods created by setupmethods).
+    // Add a method to the methods list (if not present to prevent duplicate methods created by setupMethods or intersection "+(1)").
     method addMethod(meth) {
         if (!methods.contains { m -> m.fullName == meth.fullName}) then {
             methods.add(meth)
@@ -372,10 +376,11 @@ class AnyType(nm) {
         }
         def subtypeMeth = subtype.getMethod(meth.name)
 
-        // Compare the method params with the subtype.
-        if (!meth.argumentsSubtype(subtypeMeth.paramTypes)) then {
+        // Contravariant comparison of the subtype method params with the parent.
+        if (!subtypeMeth.argumentsSubtype(meth.paramTypes)) then {
             return false
         }
+        // Covariant comparison of the parent return type against subtype.
         if (!meth.returnType.acceptsSubtype(subtypeMeth.returnType)) then {
             return false
         }
@@ -463,10 +468,12 @@ def booleanType = AnyType("Boolean")
 def doneType = AnyType("Done") // Similar to void, def/var/methods without return/types return this when done.
 def importType = AnyType("Import") // Special case for imported types as they have unknown methods (always succeeds).
 def arglessBlockType = AnyType("Block") // Block without args, such as for an if statement.
+def objectType = AnyType("Object")
 
 numberType.setupMethods(c0N(sameArgMeth("+(1)", numberType), c2N(sameArgMeth("*(1)", numberType), sameArgMeth("..(1)", numberType))))
 stringType.setupMethods(c2N(sameArgMeth("++(1)", stringType), arglessMeth("size(0)", numberType)))
 booleanType.setupMethods(o1N(arglessMeth("prefix!(0)", booleanType)))
+objectType.setupMethods(nil) // Just the default methods in Object.
 arglessBlockType.addMethod(NewMethod("apply(0)", nil, unknownType))
 doneType.addMethod(NewMethod("asString(0)", nil, stringType)) // DoneType only has asString(0).
 
@@ -1238,7 +1245,7 @@ class Environment(par) {
 class BaseEnvironment {
     def baseTypes = collections.dictionary ["Unknown" :: unknownType, "Done" :: doneType, 
                         "Boolean" :: booleanType, "Number" :: numberType, "String" :: stringType, 
-                        "Action" :: arglessBlockType]
+                        "Action" :: arglessBlockType, "Object" :: objectType]
     def standardMethods = collections.dictionary ["print(1)" :: NewMethod("print(1)", o1N(unknownType), doneType),
                     "false(0)" :: arglessMeth("false(0)", booleanType), 
                     "true(0)" :: arglessMeth("true(0)", booleanType),
@@ -1927,6 +1934,32 @@ assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"&(1)",o1N(d0R(l0R
 // def k2 : KMore = k
 assertFails(o0C(c0N(t0D("K",nil,i0C(o1N(m0S(o1N(p0T("test1",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil)))))),c0N(t0D("KMore",nil,d0R(l0R("K(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c2N(v4R("k",o1N(l0R("K(0)",nil,nil)),nil,nil),d3F("k2",o1N(l0R("KMore(0)",nil,nil)),nil,l0R("k(0)",nil,nil))))),nil), DefError)
 
+// TEST 96 (Covariant/contravariant success)
+// type StringNum = String + Number // Some child of String.
+// type A = interface { foo(x : String) -> String } // Parent
+// type B = interface { foo(x : String) -> StringNum } // Good covariant return
+// type C = interface { foo(x : Object) -> String } // Good contravariant param
+// var b : B
+// var c : C
+// def a1 : A = b
+// def a2 : A = c
+assertPasses(o0C(c0N(t0D("StringNum",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(c0M(" Some child of String."),c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Parent"),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("StringNum(0)",nil,nil)))))),c0N(c0M(" Good covariant return"),c0N(t0D("C",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("Object(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Good contravariant param"),c0N(v4R("b",o1N(l0R("B(0)",nil,nil)),nil,nil),c0N(v4R("c",o1N(l0R("C(0)",nil,nil)),nil,nil),c2N(d3F("a1",o1N(l0R("A(0)",nil,nil)),nil,l0R("b(0)",nil,nil)),d3F("a2",o1N(l0R("A(0)",nil,nil)),nil,l0R("c(0)",nil,nil))))))))))))),nil))
+
+// TEST 97 (Covariant fail)
+// type StringNum = String + Number // Some child of String.
+// type A = interface { foo(x : String) -> String } // Parent
+// type B = interface { foo(x : String) -> Object } // Violates covariant return
+// var b : B
+// def a : A = b
+assertFails(o0C(c0N(t0D("StringNum",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(c0M(" Some child of String."),c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Parent"),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("StringNum(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Violates contravariant param"),c2N(v4R("b",o1N(l0R("B(0)",nil,nil)),nil,nil),d3F("a",o1N(l0R("A(0)",nil,nil)),nil,l0R("b(0)",nil,nil))))))))),nil), DefError)
+
+// TEST 98 (Contravariant fail)
+// type StringNum = String + Number // Some child of String.
+// type A = interface { foo(x : String) -> String } // Parent
+// type B = interface { foo(x : StringNum) -> String } // Violates contravariant param
+// var b : B
+// def a : A = b
+assertFails(o0C(c0N(t0D("StringNum",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(c0M(" Some child of String."),c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Parent"),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("Object(0)",nil,nil)))))),c0N(c0M(" Violates covariant return"),c2N(v4R("b",o1N(l0R("B(0)",nil,nil)),nil,nil),d3F("a",o1N(l0R("A(0)",nil,nil)),nil,l0R("b(0)",nil,nil))))))))),nil), DefError)
 
 // TEST ? put after lineups.
 // def x = { a -> a + 1 }
