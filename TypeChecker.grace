@@ -26,7 +26,8 @@ def EnvError = TypeError.refine "EnvError"
 // Special toggle for whether it uses the value type when undeclared. May mistakenly flag when reassigned in a conditional block (loop/if statement).
 // e.g. (var x = 3; x := "hi", var y : Number : x) either passes with unknownType, or fails by comparing string value to declared number.
 def checkValueIfUndeclared = false // False will miss some failing cases (false negatives), but wont have as many incorrect errors from unconditional blocks (false positives).
-
+// Toggle to only print failed tests to be easier to compare different runs.
+def onlyPrintFails = true
 
 //
 // #### AST METHODS ####  
@@ -215,6 +216,8 @@ class NewMethod(nm, params, rType) {
 method sameArgMeth(name, rType) {
     return NewMethod(name, o1N(rType), rType)
 }
+
+
 // Helper to make method with no arguments and specific return type.
 method arglessMeth(name, rType) {
     return NewMethod(name, nil, rType)
@@ -226,6 +229,14 @@ class AnyType(nm) {
     def name is public = nm
     var declaredName is public := nm // "String" or "A" in "type A = interface {...}".
     var methods is public := nil
+
+    // Higher order function blocks for subtype checking each method of a type.
+    method compareCoinductive(trail) { 
+        // Also needs to track the current trail.
+        return { p, s, n -> acceptsCoinductive(p, s, n, trail) }
+    }
+    def compareBase = { p, s, n -> acceptsBase(p, s, n) }
+
 
     // Setup multiple methods alongside some default ones.
     method setupMethods(meths) {
@@ -274,11 +285,16 @@ class AnyType(nm) {
     // If any methods are not subtyped from parent via a certain function then return false.
     method compareMethods(parent, subtype, block) {
         var result : Boolean := true
-        parent.methods.do { meth ->
-            result := result && block.apply(parent, subtype, meth)
-            // Optimisation to stop if it reaches an invalid subtype for an earlier parameter.
-            if (!result) then {
-                return false
+        // Special case for variants to handle contravariant parameters.
+        if (parent.name == "Variant") then {
+            result := compareMethods(parent.lhsType, subtype, block) || compareMethods(parent.rhsType, subtype, block)
+        } else { // Otherwise compare all methods normally.
+            parent.methods.do { meth ->
+                result := result && block.apply(parent, subtype, meth)
+                // Optimisation to stop if it reaches an invalid subtype for an earlier parameter.
+                if (!result) then {
+                    return false
+                }
             }
         }
         return result
@@ -287,7 +303,7 @@ class AnyType(nm) {
     // Reset trail which is used to track coinductive pairs for subtyping.
     method acceptsSubtype(subtype) {
         // Check all methods. If any are not subtyped in the subtype object then return false.
-        return compareMethods(self, subtype, { p, s, n -> acceptsCoinductive(p, s, n, nil) })
+        return compareMethods(self, subtype, compareCoinductive(nil))
     }
 
     // Compare another type with this type accounting for possible coinductive relationships (interacting infinte dependencies).
@@ -298,7 +314,7 @@ class AnyType(nm) {
 
         // If at least one one is not custom type, fallback to base subtype comparison for all methods. Recursion lets this get checked at any point.
         if (!subtype.selfOrInterface || !parent.selfOrInterface) then {
-            return compareMethods(parent, subtype, { p, s, n -> acceptsBase(p, s, n) })
+            return compareMethods(parent, subtype, compareBase)
         }
 
         // Copy the trail so it does not mutate other branches.
@@ -326,14 +342,15 @@ class AnyType(nm) {
         def returnSubtype = subtypeMeth.returnType
         
         // For the parent and child return types of this method, coinductively recurse on all the methods within them. Uses current trail.
-        var result : Boolean := compareMethods(returnParent, returnSubtype, { p, s, n -> acceptsCoinductive(p, s, n, trail) })
+        var result : Boolean := compareMethods(returnParent, returnSubtype, compareCoinductive(trail)) // Covariant (can be narrower subtype).
         // Optimisation to stop if it reaches an invalid subtype for return type.
         if (!result) then {
             return false
         }
         // Do the same coinductive recursion as the return types, but for every pair of parameter types.
         paramsParent.zip(paramsSubtype) do { par, sub ->
-            result := result && compareMethods(par, sub, { p, s, n -> acceptsCoinductive(p, s, n, trail) })
+            // Parent and subtype parameters are switched order because the parameters are contravariant (can be wider subtype).
+            result := result && compareMethods(sub, par, compareCoinductive(trail))
             // Optimisation to stop if it reaches an invalid subtype for a parameter-argument pair.
             if (!result) then {
                 return false
@@ -389,11 +406,11 @@ def unknownType = object {
 
 // Undeclared type to be distinguished, so it can reassign with new type. e.g (var x := 1; x := "hi") then typecheck it.
 class UndeclaredType(val) {
-    def name is public = "Undeclared"
+    def name is public = "Undeclared:{val}"
     def declaredName is public = val.declaredName
     def value = val
     
-    // The implementation is to completely act like it is using the value. The only difference is the name is "Undeclared".
+    // The implementation is to completely act like it is using the value. The only difference is the name is "Undeclared:...".
     method acceptsSubtype(subtype) { 
         // Toggle for whether to actually check the set value.
         if (checkValueIfUndeclared) then { 
@@ -403,7 +420,7 @@ class UndeclaredType(val) {
     }
     method selfOrInterface { return value.selfOrInterface }
     method matches(other) { return value.matches(other) }
-    method asString { return "Undeclared:{value.asString}" }
+    method asString { return name }
     method addMethod(meth) { value.addMethod(meth) }
     method hasMethod(methName) { return value.hasMethod(methName) }
     method getMethod(methName) { return value.getMethod(methName) }
@@ -564,7 +581,7 @@ method reassignChangesType(env, cleanName, args, getter, setter) {
     if (checkValueIfUndeclared) then {
         def argType = UndeclaredType(args.first.inferType(env))
         // If it initially was undeclared, make getter and setter now use the argument type.
-        if (getter.returnType.name == "Undeclared") then {
+        if (getter.returnType.name.substringFrom(1)to(10) == "Undeclared") then {
             getter.returnType := argType
             setter.paramTypes := o1N(argType)
         }
@@ -1166,7 +1183,7 @@ class Environment(par) {
             // Custom class to create variant types that succeed if either or are fully implemented.
             if (methName == "|(1)") then { 
                 return VariantType(lhsType, rhsType)
-            } elseif {methName == "&(1)"} then { // Includes only methods in both.
+            } elseif {methName == "&(1)"} then { // Union includes only methods in both.
                 def newType = AnyType("Union")
                 newType.declaredName := "{lhsType.declaredName} & {rhsType.declaredName}"
                 lhsType.methods.do { methL ->
@@ -1178,7 +1195,7 @@ class Environment(par) {
                     }
                 }
                 return newType
-            } else { // Combines all methods.
+            } else { // Intersection combines all methods.
                 def newType = AnyType("Intersection")
                 newType.declaredName := "{lhsType.declaredName} + {rhsType.declaredName}"
                 lhsType.methods.do { meth -> newType.addMethod(meth) }
@@ -1301,7 +1318,6 @@ class BaseEnvironment {
 print("\n-----Tests-----")
 var testNumber := 1 // Increments after each test.
 var succeededTests := 0 // Increments each success to print out of total.
-def onlyPrintFails = false
 
 // Default error is TypeError, but specific errors can be checked to ensure the correct node threw the error.
 method assertFails(ast) {
@@ -1679,7 +1695,7 @@ assertPasses(o0C(o1N(v4R("x",o1N(l0R("Done(0)",nil,nil)),nil,o1N(l0R("print(1)",
 // x := 7
 assertPasses(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),n0M(7))),nil))
 
-// TEST 68
+// TEST 68 (Using original inferred type, may be ignored in the final implementation)
 // var x := 3
 // x := "Test"
 assertFails(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),s0L("Test"))),nil), MethodError)
@@ -1789,13 +1805,13 @@ assertPasses(o0C(c0N(t0D("A",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("
 
 // TEST 83 (Multiple methods failure)
 // type A = interface { 
-//     foo (_ : String, _ : B) -> B
+//     foo (_ : String, _ : A) -> B
 //     bar (_ : String) -> A
 // }
-// type B = interface { foo (_ : String, _ : A) -> B }
+// type B = interface { foo (_ : String, _ : B) -> B }
 // var x : A
 // var y : B := x
-assertFails(o0C(c0N(t0D("A",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))),m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+assertFails(o0C(c0N(t0D("A",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))),m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
 
 // TEST 84 (vartiant, union, intersection)
 // type A = String & Number
