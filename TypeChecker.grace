@@ -168,34 +168,22 @@ class NewMethod(nm, params, rType) {
 
     // Checks if the two methods are identical. Compares name, args and return type. Used when making union types. 
     method methodsMatch(otherName, argTypes, retType) {
-        if (name != otherName) then {
-            return false
-        }
-        if (paramTypes.size != argTypes.size) then {
-            return false
-        }
+        if (name != otherName) then { return false }
+        if (paramTypes.size != argTypes.size) then { return false }
         paramTypes.zip(argTypes) do { param, arg ->
-            if (!param.matches(arg)) then {
-                return false
-            }
+            if (!param.matches(arg)) then { return false }
         }
-        if (!returnType.matches(retType)) then {
-            return false
-        }
+        if (!returnType.matches(retType)) then { return false }
         return true
     }
 
     // Check the sent args subtype the declared methods parameters.
     method argumentsSubtype(argTypes) {
         // Check the number of arguments matches the parameters.
-        if (argTypes.size != paramTypes.size) then {
-            return false
-        }
+        if (argTypes.size != paramTypes.size) then { return false }
         paramTypes.zip(argTypes) do { param, arg ->
             // Checking if the param matches the argument type.
-            if (!param.acceptsSubtype(arg)) then {
-                return false
-            }
+            if (!param.acceptsSubtype(arg)) then { return false }
         }
         return true
     }
@@ -232,12 +220,10 @@ class AnyType(nm) {
     var declaredName is public := nm // "String" or "A" in "type A = interface {...}".
     var methods is public := nil
 
-    // Higher order function blocks for subtype checking each method of a type.
-    method compareCoinductive(trail) { 
-        // Also needs to track the current trail.
+    // Higher order function blocks for subtype checking each method of a type tracking current trail.
+    method compareCoinductive(trail) {
         return { p, s, n -> acceptsCoinductive(p, s, n, trail) }
     }
-    def compareBase = { p, s, n -> acceptsBase(p, s, n) }
 
 
     // Setup multiple methods alongside some default ones.
@@ -289,20 +275,18 @@ class AnyType(nm) {
 
     // If any methods are not subtyped from parent via a certain function then return false.
     method compareMethods(parent, subtype, block) {
-        var result : Boolean := true
+        var compatible : Boolean := true
         // Special case for variants to handle contravariant parameters.
         if (parent.name == "Variant") then {
-            result := compareMethods(parent.lhsType, subtype, block) || compareMethods(parent.rhsType, subtype, block)
+            compatible := compareMethods(parent.lhsType, subtype, block) || compareMethods(parent.rhsType, subtype, block)
         } else { // Otherwise compare all methods normally.
             parent.methods.do { meth ->
-                result := result && block.apply(parent, subtype, meth)
+                compatible := compatible && block.apply(parent, subtype, meth)
                 // Optimisation to stop if it reaches an invalid subtype for an earlier parameter.
-                if (!result) then {
-                    return false
-                }
+                if (!compatible) then { return false }
             }
         }
-        return result
+        return compatible
     }
 
     // Reset trail which is used to track coinductive pairs for subtyping.
@@ -313,79 +297,67 @@ class AnyType(nm) {
 
     // Compare another type with this type accounting for possible coinductive relationships (interacting infinte dependencies).
     method acceptsCoinductive(parent, subtype, meth, prevTrail) {
-        if ((subtype.name == "Unknown") || (parent.name == "Unknown") || (parent == subtype)) then {
-            return true
-        }
+        if ((subtype.name == "Unknown") || (parent.name == "Unknown") || (parent == subtype)) then { return true }
 
         // If at least one one is not custom type, fallback to base subtype comparison for all methods. Recursion lets this get checked at any point.
         if (!subtype.selfOrInterface || !parent.selfOrInterface) then {
-            return compareMethods(parent, subtype, compareBase)
+            return acceptsBase(parent, subtype, meth, prevTrail)
         }
 
         // Copy the trail so it does not mutate other branches.
         def trail = collections.list(prevTrail)
         def pair = "({parent.declaredName}, {subtype.declaredName})"
         // If result pair is in the trail, then it has already seen this pair in a dependency loop, hence it is an equivalent coinductive structure.
-        if (trail.contains { p -> p == pair }) then {
-            return true
-        }
+        if (trail.contains { p -> p == pair }) then { return true }
         trail.add(pair)
 
         // If the subtype does not have a matching method, then it is not equivalent.
-        if (!subtype.hasMethod(meth.name)) then {
-            return false
-        }
+        if (!subtype.hasMethod(meth.name)) then { return false }
         def subtypeMeth = subtype.getMethod(meth.name)
         // If the parameter arity is different between parent and subtype, then they are not equivalent.
         def paramsParent = meth.paramTypes
         def paramsSubtype = subtypeMeth.paramTypes
-        if (paramsParent.size != paramsSubtype.size) then {
-            return false
-        }
+        if (paramsParent.size != paramsSubtype.size) then { return false }
         // Also get the return type of parent and subtype for this method.
         def returnParent = meth.returnType
         def returnSubtype = subtypeMeth.returnType
         
-        // For the parent and child return types of this method, coinductively recurse on all the methods within them. Uses current trail.
-        var result : Boolean := compareMethods(returnParent, returnSubtype, compareCoinductive(trail)) // Covariant (can be narrower subtype).
-        // Optimisation to stop if it reaches an invalid subtype for return type.
-        if (!result) then {
-            return false
-        }
+        // For the parent and child return types of this method, coinductively recurse on all the methods within them. Covariant (can be narrower subtype).
+        if (!compareMethods(returnParent, returnSubtype, compareCoinductive(trail))) then { return false }
         // Do the same coinductive recursion as the return types, but for every pair of parameter types.
+        var paramsMatch : Boolean := true
         paramsParent.zip(paramsSubtype) do { par, sub ->
             // Parent and subtype parameters are switched order because the parameters are contravariant (can be wider subtype).
-            result := result && compareMethods(sub, par, compareCoinductive(trail))
+            paramsMatch := paramsMatch && compareMethods(sub, par, compareCoinductive(trail))
             // Optimisation to stop if it reaches an invalid subtype for a parameter-argument pair.
-            if (!result) then {
-                return false
-            }
+            if (!paramsMatch) then { return false }
         }
-        return result
+        return paramsMatch
     }
 
-    // Compare another type with this type to check if matching/subtype.
-    method acceptsBase(parent, subtype, meth) {
+    // Compare another type with this type to check if matching/subtype. Now reuses the trail to prevent subtype checks from scratch between base and declared types.
+    method acceptsBase(parent, subtype, meth, trail) {
         // Unknown always subtypes and the same object subtypes.
-        if ((subtype.name == "Unknown") || (parent.name == "Unknown") || (parent == subtype)) then {
-            return true
-        }
+        if ((subtype.name == "Unknown") || (parent.name == "Unknown") || (parent == subtype)) then { return true }
 
         // The subtype should at least have the methods of the parent type.
-        if (!subtype.hasMethod(meth.name)) then {
-            return false
-        }
+        if (!subtype.hasMethod(meth.name)) then { return false }
         def subtypeMeth = subtype.getMethod(meth.name)
 
+        // Covariant comparison of the parent return type against subtype. If either type is base then compareCoinductive returns to acceptsBase.
+        if (!compareMethods(meth.returnType, subtypeMeth.returnType, compareCoinductive(trail))) then { return false }
+
         // Contravariant comparison of the subtype method params with the parent.
-        if (!subtypeMeth.argumentsSubtype(meth.paramTypes)) then {
-            return false
+        def paramsParent = meth.paramTypes
+        def paramsSubtype = subtypeMeth.paramTypes
+        if (paramsParent.size != paramsSubtype.size) then { return false }
+        var paramsMatch : Boolean := true
+        paramsParent.zip(paramsSubtype) do { par, sub ->
+            // Compare params in order. If either type is base then compareCoinductive returns to acceptsBase.
+            paramsMatch := paramsMatch && compareMethods(sub, par, compareCoinductive(trail))
+            if (!paramsMatch) then { return false }
         }
-        // Covariant comparison of the parent return type against subtype.
-        if (!meth.returnType.acceptsSubtype(subtypeMeth.returnType)) then {
-            return false
-        }
-        // Succeeded method check. Name doesn't have to match.
+        // Succeeded structural subtyping method checks. The names of types do not have to match.
         return true
     }
 }
@@ -451,12 +423,8 @@ class VariantType(lhs, rhs) {
     method hasMethod(methName) { return lhsType.hasMethod(methName) || rhsType.hasMethod(methName) }
     // Get a method from either of the types within the variant.
     method getMethod(methName) { 
-        if (lhsType.hasMethod(methName)) then {
-            return lhsType.getMethod(methName)
-        } 
-        if (rhsType.hasMethod(methName)) then {
-            return rhsType.getMethod(methName)
-        }
+        if (lhsType.hasMethod(methName)) then { return lhsType.getMethod(methName) } 
+        if (rhsType.hasMethod(methName)) then { return rhsType.getMethod(methName) }
         TypeError.raise "Both types in variant '{declaredName}' do not have method '{methName}'"
     }
 }
@@ -650,9 +618,7 @@ class DotRequestNode(rec, meth, args, generics) {
     method inferType(env) {
         def receiverType = receiver.inferType(env)
         // If it is an imported type, it is unknown whether the method exists or what it returns.
-        if ((receiverType.name == "Import") || (receiverType.name == "Unknown")) then {
-            return unknownType
-        }
+        if ((receiverType.name == "Import") || (receiverType.name == "Unknown")) then { return unknownType }
         def argumentTypes = arguments.map { a -> 
             a.inferType(env)
         }
@@ -1126,9 +1092,7 @@ class Environment(par) {
     // Search for methods with matching name. Finds first (masking of outer environments).
     method findMethod(name) is override {
         methods.do { n ->
-            if (n.name == name) then {
-                return n
-            }
+            if (n.name == name) then { return n }
         }
         // Could not find in its own environment, so check parent.
         return parent.findMethod(name)
@@ -1143,17 +1107,13 @@ class Environment(par) {
     // If this environment is within a method then it recursively finds the return type.
     method getReturnType is override {
         // Return type is set if not nil (can be unknownType).
-        if (!isNil(returnType)) then {
-            return returnType
-        }
+        if (!isNil(returnType)) then { return returnType }
         return parent.getReturnType
     }
 
     method getDeclaredName is override {
         // Like return type it gets the method declared name.
-        if (!isNil(declaredName)) then {
-            return declaredName
-        }
+        if (!isNil(declaredName)) then { return declaredName }
         return parent.getDeclaredName
     }
 
@@ -1172,9 +1132,7 @@ class Environment(par) {
             def name = expr.cleanName
             
             // Search through declared types.
-            if (types.containsKey(name)) then {
-                return types.at(name)
-            }
+            if (types.containsKey(name)) then { return types.at(name) }
         } elseif {expr.name == "dot request"} then {
             def methName = expr.methodName
             // Special case for exclusively the variant/union/intersection dot requests: |, & and +.
@@ -1312,9 +1270,7 @@ class BaseEnvironment {
             name := expr.cleanName
         }
         // Gets literal for static types (Unknown, Done, Boolean, Number, String).
-        if (baseTypes.containsKey(name)) then {
-            return baseTypes.at(name)
-        }
+        if (baseTypes.containsKey(name)) then { return baseTypes.at(name) }
         EnvError.raise "Unexpected type not present in the environment: '{name}'"
     }
 }
@@ -1911,10 +1867,10 @@ assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("Bo
 // type I = interface { bar(_ : D, _ : F, _ : H) -> G }
 // type J = D + D
 // type K = interface { 
-//     test1(_ : K, _ : K, _ : K,  _ : K, _ : K, _ : K, _ : K, _ : K) -> K
-//     test2(_ : K, _ : K, _ : K,  _ : K, _ : K, _ : K, _ : K, _ : K) -> K
-//     test3(_ : K, _ : K, _ : K,  _ : K, _ : K, _ : K, _ : K, _ : K) -> K 
-//     test4(_ : K, _ : K, _ : K,  _ : K, _ : K, _ : K, _ : K, _ : K) -> K 
+//     test1(_ : K, _ : K, _ : K, _ : K, _ : K, _ : K, _ : K, _ : K) -> K
+//     test2(_ : K, _ : K, _ : K, _ : K, _ : K, _ : K, _ : K, _ : K) -> K
+//     test3(_ : K, _ : K, _ : K, _ : K, _ : K, _ : K, _ : K, _ : K) -> K 
+//     test4(_ : K, _ : K, _ : K, _ : K, _ : K, _ : K, _ : K, _ : K) -> K 
 // }
 // type KMore = K + Number
 // type KLess = K & C
@@ -1927,7 +1883,8 @@ assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("Bo
 // var k3 : KMore
 // def k4 : K = k3
 // def k4 : KLess = k3
-assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"&(1)",o1N(d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("Boolean(0)",nil,nil)),nil)),nil)),c0N(t0D("B",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("A(0)",nil,nil)),nil)),nil)),c0N(t0D("C",nil,d0R(l0R("A(0)",nil,nil),"&(1)",o1N(l0R("B(0)",nil,nil)),nil)),c0N(t0D("D",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(d0R(l0R("E(0)",nil,nil),"|(1)",o1N(l0R("H(0)",nil,nil)),nil)))),nil)),o1N(l0R("D(0)",nil,nil)))))),c0N(t0D("E",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("F(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("F",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("D(0)",nil,nil))),c2N(i0D("_",o1N(l0R("E(0)",nil,nil))),i0D("_",o1N(d0R(l0R("G(0)",nil,nil),"|(1)",o1N(l0R("E(0)",nil,nil)),nil))))),nil)),o1N(l0R("F(0)",nil,nil)))))),c0N(t0D("G",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("H(0)",nil,nil))),c2N(i0D("_",o1N(l0R("D(0)",nil,nil))),i0D("_",o1N(d0R(l0R("C(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil))))),nil)),o1N(l0R("H(0)",nil,nil)))))),c0N(t0D("H",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("I(0)",nil,nil))),c2N(i0D("_",o1N(d0R(l0R("E(0)",nil,nil),"|(1)",o1N(l0R("F(0)",nil,nil)),nil))),i0D("_",o1N(l0R("G(0)",nil,nil))))),nil)),o1N(l0R("F(0)",nil,nil)))))),c0N(t0D("I",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("D(0)",nil,nil))),c2N(i0D("_",o1N(l0R("F(0)",nil,nil))),i0D("_",o1N(l0R("H(0)",nil,nil))))),nil)),o1N(l0R("G(0)",nil,nil)))))),c0N(t0D("J",nil,d0R(l0R("D(0)",nil,nil),"+(1)",o1N(l0R("D(0)",nil,nil)),nil)),c0N(t0D("K",nil,i0C(c0N(m0S(o1N(p0T("test1",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil))),c0N(m0S(o1N(p0T("test2",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil))),c2N(m0S(o1N(p0T("test3",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil))),m0S(o1N(p0T("test4",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil)))))))),c0N(t0D("KMore",nil,d0R(l0R("K(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(t0D("KLess",nil,d0R(l0R("K(0)",nil,nil),"&(1)",o1N(l0R("C(0)",nil,nil)),nil)),c0N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),c0N(v4R("y",o1N(l0R("C(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil))),c0N(v4R("z",o1N(l0R("D(0)",nil,nil)),nil,nil),c0N(v4R("a",o1N(l0R("J(0)",nil,nil)),nil,o1N(l0R("z(0)",nil,nil))),c0N(v4R("k",o1N(l0R("K(0)",nil,nil)),nil,nil),c0N(d3F("k2",o1N(l0R("KLess(0)",nil,nil)),nil,l0R("k(0)",nil,nil)),c0N(v4R("k3",o1N(l0R("KMore(0)",nil,nil)),nil,nil),c2N(d3F("k4",o1N(l0R("K(0)",nil,nil)),nil,l0R("k3(0)",nil,nil)),d3F("k4",o1N(l0R("KLess(0)",nil,nil)),nil,l0R("k3(0)",nil,nil))))))))))))))))))))))),nil))
+//assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"&(1)",o1N(d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("Boolean(0)",nil,nil)),nil)),nil)),c0N(t0D("B",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("A(0)",nil,nil)),nil)),nil)),c0N(t0D("C",nil,d0R(l0R("A(0)",nil,nil),"&(1)",o1N(l0R("B(0)",nil,nil)),nil)),c0N(t0D("D",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(d0R(l0R("E(0)",nil,nil),"|(1)",o1N(l0R("H(0)",nil,nil)),nil)))),nil)),o1N(l0R("D(0)",nil,nil)))))),c0N(t0D("E",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("F(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("F",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("D(0)",nil,nil))),c2N(i0D("_",o1N(l0R("E(0)",nil,nil))),i0D("_",o1N(d0R(l0R("G(0)",nil,nil),"|(1)",o1N(l0R("E(0)",nil,nil)),nil))))),nil)),o1N(l0R("F(0)",nil,nil)))))),c0N(t0D("G",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("H(0)",nil,nil))),c2N(i0D("_",o1N(l0R("D(0)",nil,nil))),i0D("_",o1N(d0R(l0R("C(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil))))),nil)),o1N(l0R("H(0)",nil,nil)))))),c0N(t0D("H",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("I(0)",nil,nil))),c2N(i0D("_",o1N(d0R(l0R("E(0)",nil,nil),"|(1)",o1N(l0R("F(0)",nil,nil)),nil))),i0D("_",o1N(l0R("G(0)",nil,nil))))),nil)),o1N(l0R("F(0)",nil,nil)))))),c0N(t0D("I",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("D(0)",nil,nil))),c2N(i0D("_",o1N(l0R("F(0)",nil,nil))),i0D("_",o1N(l0R("H(0)",nil,nil))))),nil)),o1N(l0R("G(0)",nil,nil)))))),c0N(t0D("J",nil,d0R(l0R("D(0)",nil,nil),"+(1)",o1N(l0R("D(0)",nil,nil)),nil)),c0N(t0D("K",nil,i0C(c0N(m0S(o1N(p0T("test1",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil))),c0N(m0S(o1N(p0T("test2",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil))),c2N(m0S(o1N(p0T("test3",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil))),m0S(o1N(p0T("test4",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil)))))))),c0N(t0D("KMore",nil,d0R(l0R("K(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(t0D("KLess",nil,d0R(l0R("K(0)",nil,nil),"&(1)",o1N(l0R("C(0)",nil,nil)),nil)),c0N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),c0N(v4R("y",o1N(l0R("C(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil))),c0N(v4R("z",o1N(l0R("D(0)",nil,nil)),nil,nil),c0N(v4R("a",o1N(l0R("J(0)",nil,nil)),nil,o1N(l0R("z(0)",nil,nil))),c0N(v4R("k",o1N(l0R("K(0)",nil,nil)),nil,nil),c0N(d3F("k2",o1N(l0R("KLess(0)",nil,nil)),nil,l0R("k(0)",nil,nil)),c0N(v4R("k3",o1N(l0R("KMore(0)",nil,nil)),nil,nil),c2N(d3F("k4",o1N(l0R("K(0)",nil,nil)),nil,l0R("k3(0)",nil,nil)),d3F("k4",o1N(l0R("KLess(0)",nil,nil)),nil,l0R("k3(0)",nil,nil))))))))))))))))))))))),nil))
+assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"&(1)",o1N(d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("Boolean(0)",nil,nil)),nil)),nil)),c0N(t0D("B",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(d0R(l0R("Number(0)",nil,nil),"&(1)",o1N(l0R("A(0)",nil,nil)),nil)),nil)),c0N(t0D("C",nil,d0R(l0R("A(0)",nil,nil),"&(1)",o1N(l0R("B(0)",nil,nil)),nil)),c0N(t0D("D",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(d0R(l0R("E(0)",nil,nil),"|(1)",o1N(l0R("H(0)",nil,nil)),nil)))),nil)),o1N(l0R("D(0)",nil,nil)))))),c0N(t0D("E",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("F(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("F",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("D(0)",nil,nil))),c2N(i0D("_",o1N(l0R("E(0)",nil,nil))),i0D("_",o1N(d0R(l0R("G(0)",nil,nil),"|(1)",o1N(l0R("E(0)",nil,nil)),nil))))),nil)),o1N(l0R("F(0)",nil,nil)))))),c0N(t0D("G",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("H(0)",nil,nil))),c2N(i0D("_",o1N(l0R("D(0)",nil,nil))),i0D("_",o1N(d0R(l0R("C(0)",nil,nil),"|(1)",o1N(l0R("A(0)",nil,nil)),nil))))),nil)),o1N(l0R("H(0)",nil,nil)))))),c0N(t0D("H",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("I(0)",nil,nil))),c2N(i0D("_",o1N(d0R(l0R("E(0)",nil,nil),"|(1)",o1N(l0R("F(0)",nil,nil)),nil))),i0D("_",o1N(l0R("G(0)",nil,nil))))),nil)),o1N(l0R("F(0)",nil,nil)))))),c0N(t0D("I",nil,i0C(o1N(m0S(o1N(p0T("bar",c0N(i0D("_",o1N(l0R("D(0)",nil,nil))),c2N(i0D("_",o1N(l0R("F(0)",nil,nil))),i0D("_",o1N(l0R("H(0)",nil,nil))))),nil)),o1N(l0R("G(0)",nil,nil)))))),c0N(t0D("J",nil,d0R(l0R("D(0)",nil,nil),"+(1)",o1N(l0R("D(0)",nil,nil)),nil)),c0N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),c0N(v4R("y",o1N(l0R("C(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil))),c2N(v4R("z",o1N(l0R("D(0)",nil,nil)),nil,nil),v4R("a",o1N(l0R("J(0)",nil,nil)),nil,o1N(l0R("z(0)",nil,nil)))))))))))))))),nil))
 
 // TEST 95 (Simplified counterexample of previous test, fails as K doesn't subtype KMore)
 // type K = interface { test1(_ : K, _ : K, _ : K,  _ : K, _ : K, _ : K, _ : K, _ : K) -> K }
@@ -1963,28 +1920,30 @@ assertFails(DefError, o0C(c0N(t0D("StringNum",nil,d0R(l0R("String(0)",nil,nil),"
 // def a : A = b
 assertFails(DefError, o0C(c0N(t0D("StringNum",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(c0M(" Some child of String."),c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Parent"),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("Object(0)",nil,nil)))))),c0N(c0M(" Violates covariant return"),c2N(v4R("b",o1N(l0R("B(0)",nil,nil)),nil,nil),d3F("a",o1N(l0R("A(0)",nil,nil)),nil,l0R("b(0)",nil,nil))))))))),nil))
 
-// TEST ? put after lineups.
+// TEST 99 (LINEUPS not implemented)
 // def x = { a -> a + 1 }
 // [1, 2, 3].map { e -> x.apply(e) }
-// assertPasses(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0N(c0N(n0M(1),c2N(n0M(2),n0M(3)))),"map(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
-// TEST ? put after lineups.
+assertPasses(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0N(c0N(n0M(1),c2N(n0M(2),n0M(3)))),"map(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
+
+// TEST 100 put after lineups.
 // def x = { a -> a + 1 }
 // ["test", 2, "yes"].map { e -> x.apply(e) }
-// assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0N(c0N(s0L("test"),c2N(n0M(2),s0L("yes")))),"map(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
+assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0N(c0N(s0L("test"),c2N(n0M(2),s0L("yes")))),"map(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
 
-// TEST ? put after blocks on lineups.
+// TEST 101 put after blocks on lineups.
 // def x = { a -> print(a + 1) }
 // [1, 2, 3].do { e -> x.apply(e) }
-// assertPasses(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("print(1)",o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)),nil)))),d0R(l0N(c0N(n0M(1),c2N(n0M(2),n0M(3)))),"do(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
-// TEST ?
+assertPasses(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("print(1)",o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)),nil)))),d0R(l0N(c0N(n0M(1),c2N(n0M(2),n0M(3)))),"do(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
+
+// TEST 102
 // def x = { a -> print(a + 1) }
 // ["test", 2, "yes"].do { e -> x.apply(e) }
-// assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("print(1)",o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)),nil)))),d0R(l0N(c0N(s0L("test"),c2N(n0M(2),s0L("yes")))),"do(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
+assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("print(1)",o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)),nil)))),d0R(l0N(c0N(s0L("test"),c2N(n0M(2),s0L("yes")))),"do(1)",o1N(b1K(o1N(i0D("e",nil)),o1N(d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0R("e(0)",nil,nil)),nil)))),nil)),nil))
 
-// TEST ?
+// TEST 103
 // def x = { a -> a + 1 }
 // x.apply(["test", "str"])
-// assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0N(c2N(s0L("test"),s0L("str")))),nil)),nil))
+assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(n0M(1)),nil)))),d0R(l0R("x(0)",nil,nil),"apply(1)",o1N(l0N(c2N(s0L("test"),s0L("str")))),nil)),nil))
 
 
 // Print summary
