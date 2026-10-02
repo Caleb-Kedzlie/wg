@@ -30,6 +30,7 @@ def checkValueIfUndeclared = false
 // Toggle to only print failed tests to be easier to compare different runs.
 def onlyPrintFails = false
 
+
 //
 // #### AST METHODS ####  
 // TODO: the annotations/generics parameters in many of these nodes are unused. It is an advanced feature and my focus is on completing structural typing and then generics, so it may not be completed.
@@ -494,7 +495,7 @@ class LiteralNode(nm, v, lit) {
     }
 
     method checkType(env, expected) { // Expected and Actual are AnyType literals.
-        def actual = self.inferType(env)
+        def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
             LiteralError.raise "Actual type '{actual}' is not a subtype of expected '{expected}' for {name}" 
         }
@@ -793,7 +794,7 @@ class InterpolatedStringNode(pre, expr, suff) {
         expr.checkType(env, unknownType)
 
         // This node should always be a stringType.
-        def actual = self.inferType(env)
+        def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
             StringError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
@@ -964,7 +965,7 @@ class TypeNode(nm, generics, val) {
             env.findType(value)
         }
 
-        def actual = self.inferType(env)
+        def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
             TypeDeclError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
@@ -1003,7 +1004,7 @@ class InterfaceNode(bdy) {
             }
         }
         // Check it still expects doneType.
-        def actual = self.inferType(env)
+        def actual = inferType(env)
         if (!expected.acceptsSubtype(actual)) then {
             InterfaceError.raise "Actual type '{actual}' is not a subtype of '{expected}' for {name}" 
         }
@@ -1043,14 +1044,15 @@ class LineupNode(elems) {
     def elements is public = elems
 
     method inferType(env) {
-        return unknownType // TODO
+        return unknownType // Placeholder. TODO add generics.
         // Typecheck the declared type against the common element type e.g. def x : List[[String]] = ["hi", "bye"]
-        // Has to be a type that encompasses all other types, potentially needing to be Object if incompatable like: [3, "hi"]
-        // So return some lineupType representation that stores String, then var/def can compare to that generic type.
+        // Searches environments for the first type that encompasses all elem types. If no type is found, Object is used as it is always compatible.
+        // Should return an AnyType("Lineup") representation that uses the generic type (possibly unknown), then var/def/do can compare to that generic type.
     }
 
     method checkType(env, expected) {
-        // LineupError.raise ""
+        // Also needs generics implemented first.
+        // LineupError.raise "The lineup with elements '{elements..join(", ")}' do not match declared generic type '{expected}'"
     }
 }
 
@@ -1075,7 +1077,7 @@ class ImportNode(src, bind) {
 
     method addToEnvironment(env) {
         // TODO Is it likely possible to minimally typecheck the declaredType.
-        //def decType = env.findType(declaredType)
+        // def decType = env.findType(declaredType)
         // For each method in declared type add "declaredName.method"
 
         def meth = NewMethod(declaredName ++ "(0)", nil, importType)
@@ -1328,11 +1330,11 @@ var succeededTests := 0 // Increments each success to print out of total.
 
 // Default error is TypeError, but specific errors can be checked to ensure the correct node threw the error.
 method assertFails(ast) {
-    assertFails(ast, TypeError)
+    assertFails(TypeError, ast)
 }
 
 // Try-catch to run AST then throw a FailedError if it did not throw the expected TypeError (or derivative) exception.
-method assertFails(ast, error) {
+method assertFails(error, ast) {
     try {
         ast.checkType(Environment(BaseEnvironment), unknownType)
         FailedError.raise "No '{error}' thrown"
@@ -1387,11 +1389,11 @@ assertPasses(o0C(o1N(d0R(l0R("false(0)",nil,nil),"prefix!(0)",nil,nil)),nil))
 
 // TEST 5
 // 3 + "hi"
-assertFails(o0C(o1N(d0R(n0M(3),"+(1)",o1N(s0L("hi")),nil)),nil), MethodError)
+assertFails(MethodError, o0C(o1N(d0R(n0M(3),"+(1)",o1N(s0L("hi")),nil)),nil))
 
 // TEST 6
 // "hi" ++ 3
-assertFails(o0C(o1N(d0R(s0L("hi"),"++(1)",o1N(n0M(3)),nil)),nil), MethodError)
+assertFails(MethodError, o0C(o1N(d0R(s0L("hi"),"++(1)",o1N(n0M(3)),nil)),nil))
 
 // TEST 7
 // 3 + 11
@@ -1400,36 +1402,36 @@ assertPasses(o0C(o1N(d0R(n0M(3),"+(1)",o1N(n0M(11)),nil)),nil))
 // TEST 8
 // var x := 3
 // var y : String := x
-assertFails(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))),nil), VarError)
+assertFails(VarError, o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))),nil))
 
 // TEST 9
 // var x : Boolean := true
 // var y : String := x
-assertFails(o0C(c2N(v4R("x",o1N(l0R("Boolean(0)",nil,nil)),nil,o1N(l0R("true(0)",nil,nil))),v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))),nil), VarError)
+assertFails(VarError, o0C(c2N(v4R("x",o1N(l0R("Boolean(0)",nil,nil)),nil,o1N(l0R("true(0)",nil,nil))),v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))),nil))
 
 // TEST 10
 // var y : String := 3
-assertFails(o0C(o1N(v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(n0M(3)))),nil), VarError)
+assertFails(VarError, o0C(o1N(v4R("y",o1N(l0R("String(0)",nil,nil)),nil,o1N(n0M(3)))),nil))
 
 // Undefined variable and method.
 
 // TEST 11
 // a
-assertFails(o0C(o1N(l0R("a(0)",nil,nil)),nil), EnvError)
+assertFails(EnvError, o0C(o1N(l0R("a(0)",nil,nil)),nil))
 
 // TEST 12
 // a.b
-assertFails(o0C(o1N(d0R(l0R("a(0)",nil,nil),"b(0)",nil,nil)),nil), EnvError)
+assertFails(EnvError, o0C(o1N(d0R(l0R("a(0)",nil,nil),"b(0)",nil,nil)),nil))
 
 // TEST 13
 // def x = 3
 // x.test
-assertFails(o0C(c2N(d3F("x",nil,nil,n0M(3)),d0R(l0R("x(0)",nil,nil),"test(0)",nil,nil)),nil), DotReqError)
+assertFails(DotReqError, o0C(c2N(d3F("x",nil,nil,n0M(3)),d0R(l0R("x(0)",nil,nil),"test(0)",nil,nil)),nil))
 
 // TEST 14
 // def x = 3
 // 1 + x.test(1)
-assertFails(o0C(c2N(d3F("x",nil,nil,n0M(3)),d0R(n0M(1),"+(1)",o1N(d0R(l0R("x(0)",nil,nil),"test(1)",o1N(n0M(1)),nil)),nil)),nil), DotReqError)
+assertFails(DotReqError, o0C(c2N(d3F("x",nil,nil,n0M(3)),d0R(n0M(1),"+(1)",o1N(d0R(l0R("x(0)",nil,nil),"test(1)",o1N(n0M(1)),nil)),nil)),nil))
 
 // TEST 15
 // var x : String := "test"
@@ -1449,11 +1451,11 @@ assertPasses(o0C(o1N(l0R("print(1)",o1N(n0M(3)),nil)),nil))
 
 // TEST 19
 // print(3, 3)
-assertFails(o0C(o1N(l0R("print(2)",c2N(n0M(3),n0M(3)),nil)),nil), EnvError)
+assertFails(EnvError, o0C(o1N(l0R("print(2)",c2N(n0M(3),n0M(3)),nil)),nil))
 
 // TEST 20
 // print
-assertFails(o0C(o1N(l0R("print(0)",nil,nil)),nil), EnvError)
+assertFails(EnvError, o0C(o1N(l0R("print(0)",nil,nil)),nil))
 
 // TEST 21
 // var x := 3
@@ -1478,7 +1480,7 @@ assertPasses(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),n0M(4)
 // TEST 25
 // var x := 3
 // x := true
-assertFails(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),l0R("true(0)",nil,nil))),nil), MethodError)
+assertFails(MethodError, o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),l0R("true(0)",nil,nil))),nil))
 
 // TEST 26
 // def x : Boolean = true
@@ -1490,11 +1492,11 @@ assertPasses(o0C(o1N(l0R("if(1)then(1)",c2N(d0R(n0M(3),"==(1)",o1N(n0M(3)),nil),
 
 // TEST 28
 // if ("hi") then {}
-assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(s0L("hi"),b1K(nil,nil)),nil)),nil), MethodError)
+assertFails(MethodError, o0C(o1N(l0R("if(1)then(1)",c2N(s0L("hi"),b1K(nil,nil)),nil)),nil))
 
 // TEST 29
 // if (7) then {}
-assertFails(o0C(o1N(l0R("if(1)then(1)",c2N(n0M(7),b1K(nil,nil)),nil)),nil), MethodError)
+assertFails(MethodError, o0C(o1N(l0R("if(1)then(1)",c2N(n0M(7),b1K(nil,nil)),nil)),nil))
 
 // TEST 30
 // if (true) then {}
@@ -1527,11 +1529,11 @@ assertPasses(o0C(o1N(m0D(c2N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil)
 
 // TEST 37
 // method test(x: Number) when(y : Boolean) { x+y }
-assertFails(o0C(o1N(m0D(c2N(p0T("test",o1N(i0D("x",o1N(l0R("Number(0)",nil,nil)))),nil),p0T("when",o1N(i0D("y",o1N(l0R("Boolean(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil)))),nil), MethodError)
+assertFails(MethodError, o0C(o1N(m0D(c2N(p0T("test",o1N(i0D("x",o1N(l0R("Number(0)",nil,nil)))),nil),p0T("when",o1N(i0D("y",o1N(l0R("Boolean(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(l0R("x(0)",nil,nil),"+(1)",o1N(l0R("y(0)",nil,nil)),nil)))),nil))
 
 // TEST 38
 // method test(x : String, y: Number) { x * y }
-assertFails(o0C(o1N(m0D(o1N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(l0R("x(0)",nil,nil),"*(1)",o1N(l0R("y(0)",nil,nil)),nil)))),nil), DotReqError)
+assertFails(DotReqError, o0C(o1N(m0D(o1N(p0T("test",c2N(i0D("x",o1N(l0R("String(0)",nil,nil))),i0D("y",o1N(l0R("Number(0)",nil,nil)))),nil)),nil,nil,o1N(d0R(l0R("x(0)",nil,nil),"*(1)",o1N(l0R("y(0)",nil,nil)),nil)))),nil))
 
 // TEST 39
 // method test(x : String, y: Number) { print(x)
@@ -1548,11 +1550,11 @@ assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),
 
 // TEST 42
 // method test -> String { return 4 }
-assertFails(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,o1N(r3T(n0M(4))))),nil), ReturnError)
+assertFails(ReturnError, o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,o1N(r3T(n0M(4))))),nil))
 
 // TEST 43 (implicit return)
 // method test -> String { 4 }
-assertFails(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,o1N(n0M(4)))),nil), ReturnError)
+assertFails(ReturnError, o0C(o1N(m0D(o1N(p0T("test",nil,nil)),o1N(l0R("String(0)",nil,nil)),nil,o1N(n0M(4)))),nil))
 
 // TEST 44
 // method test -> String { 4
@@ -1580,20 +1582,20 @@ assertPasses(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(d0R(l0R("a(0)",ni
 
 // TEST 49
 // def x : String = {a -> a}
-assertFails(o0C(o1N(d3F("x",o1N(l0R("String(0)",nil,nil)),nil,b1K(o1N(i0D("a",nil)),o1N(l0R("a(0)",nil,nil))))),nil), DefError)
+assertFails(DefError, o0C(o1N(d3F("x",o1N(l0R("String(0)",nil,nil)),nil,b1K(o1N(i0D("a",nil)),o1N(l0R("a(0)",nil,nil))))),nil))
 
 // TEST 50
 // def x = {a -> a} 
 // def y : String = x
-assertFails(o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("a(0)",nil,nil)))),d3F("y",o1N(l0R("String(0)",nil,nil)),nil,l0R("x(0)",nil,nil))),nil), DefError)
+assertFails(DefError, o0C(c2N(d3F("x",nil,nil,b1K(o1N(i0D("a",nil)),o1N(l0R("a(0)",nil,nil)))),d3F("y",o1N(l0R("String(0)",nil,nil)),nil,l0R("x(0)",nil,nil))),nil))
 
 // TEST 51
 // def x = {a : Number -> a + "Test"}
-assertFails(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)))),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(s0L("Test")),nil))))),nil), MethodError)
+assertFails(MethodError, o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)))),o1N(d0R(l0R("a(0)",nil,nil),"+(1)",o1N(s0L("Test")),nil))))),nil))
 
 // TEST 52
 // def x = {a : Number -> a ++ "Test"}
-assertFails(o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)))),o1N(d0R(l0R("a(0)",nil,nil),"++(1)",o1N(s0L("Test")),nil))))),nil), DotReqError)
+assertFails(DotReqError, o0C(o1N(d3F("x",nil,nil,b1K(o1N(i0D("a",o1N(l0R("Number(0)",nil,nil)))),o1N(d0R(l0R("a(0)",nil,nil),"++(1)",o1N(s0L("Test")),nil))))),nil))
 
 // TEST 53
 //type A = interface {}
@@ -1705,19 +1707,19 @@ assertPasses(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),n0M(7)
 // TEST 68 (Using original inferred type, may be ignored in the final implementation)
 // var x := 3
 // x := "Test"
-assertFails(o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),s0L("Test"))),nil), MethodError)
+assertFails(MethodError, o0C(c2N(v4R("x",nil,nil,o1N(n0M(3))),a5N(l0R("x(0)",nil,nil),s0L("Test"))),nil))
 
 // TEST 69
 // var x : String := "Test String"
 // x := 7
-assertFails(o0C(c2N(v4R("x",o1N(l0R("String(0)",nil,nil)),nil,o1N(s0L("Test String"))),a5N(l0R("x(0)",nil,nil),l0R("false(0)",nil,nil))),nil), MethodError)
+assertFails(MethodError, o0C(c2N(v4R("x",o1N(l0R("String(0)",nil,nil)),nil,o1N(s0L("Test String"))),a5N(l0R("x(0)",nil,nil),l0R("false(0)",nil,nil))),nil))
 
 // TEST 70 (Unreachable code)
 // method test { 
 //     return 4
 //     5
 // }
-assertFails(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,c2N(r3T(n0M(4)),n0M(5)))),nil), ReturnError)
+assertFails(ReturnError, o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,c2N(r3T(n0M(4)),n0M(5)))),nil))
 
 // TEST 71 (False negative, unreachable past unconditional block)
 // method test {
@@ -1729,12 +1731,12 @@ assertPasses(o0C(o1N(m0D(o1N(p0T("test",nil,nil)),nil,nil,c2N(l0R("if(1)then(1)"
 // TEST 72
 // def y = "hi"
 // def x : Number = y ++ "bye"
-assertFails(o0C(c2N(d3F("y",nil,nil,s0L("hi")),d3F("x",o1N(l0R("Number(0)",nil,nil)),nil,d0R(l0R("y(0)",nil,nil),"++(1)",o1N(s0L("bye")),nil))),nil), DefError)
+assertFails(DefError, o0C(c2N(d3F("y",nil,nil,s0L("hi")),d3F("x",o1N(l0R("Number(0)",nil,nil)),nil,d0R(l0R("y(0)",nil,nil),"++(1)",o1N(s0L("bye")),nil))),nil))
 
 // TEST 73 (Should fail because they both make a method with the same name)
 // def Test = object {}
 // class Test {}
-assertFails(o0C(c2N(d3F("Test",nil,nil,o0C(nil,nil)),m0D(o1N(p0T("Test",nil,nil)),nil,nil,o1N(o0C(nil,nil)))),nil), EnvError)
+assertFails(EnvError, o0C(c2N(d3F("Test",nil,nil,o0C(nil,nil)),m0D(o1N(p0T("Test",nil,nil)),nil,nil,o1N(o0C(nil,nil)))),nil))
 
 // TEST 74 (Non-terminating D)
 // type A = interface { foo (_ : C) -> C }
@@ -1743,7 +1745,7 @@ assertFails(o0C(c2N(d3F("Test",nil,nil,o0C(nil,nil)),m0D(o1N(p0T("Test",nil,nil)
 // type D = interface { foo -> D }
 // var a : A
 // def b : B = a
-assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("C(0)",nil,nil)))),nil)),o1N(l0R("C(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("D(0)",nil,nil)))),nil)),o1N(l0R("D(0)",nil,nil)))))),c0N(t0D("C",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(t0D("D",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("D(0)",nil,nil)))))),c2N(v4R("a",o1N(l0R("A(0)",nil,nil)),nil,nil),d3F("b",o1N(l0R("B(0)",nil,nil)),nil,l0R("a(0)",nil,nil))))))),nil), DefError)
+assertFails(DefError, o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("C(0)",nil,nil)))),nil)),o1N(l0R("C(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("D(0)",nil,nil)))),nil)),o1N(l0R("D(0)",nil,nil)))))),c0N(t0D("C",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(t0D("D",nil,i0C(o1N(m0S(o1N(p0T("foo",nil,nil)),o1N(l0R("D(0)",nil,nil)))))),c2N(v4R("a",o1N(l0R("A(0)",nil,nil)),nil,nil),d3F("b",o1N(l0R("B(0)",nil,nil)),nil,l0R("a(0)",nil,nil))))))),nil))
 
 // TEST 75 (Valid multi param methods) The next few tests check all possible permutations of this.
 // type A = interface { foo (_ : String, _ : B) -> B }
@@ -1757,21 +1759,21 @@ assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("
 // type B = interface { foo (_ : A, _ : A) -> B }
 // var x : A
 // var y : B := x
-assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("A(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+assertFails(VarError, o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("A(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
 
 // TEST 77 (Different terminating type)
 // type A = interface { foo (_ : String, _ : B) -> B }
 // type B = interface { foo (_ : Number, _ : A) -> B }
 // var x : A
 // var y : B := x
-assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("Number(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+assertFails(VarError, o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("Number(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
 
 // TEST 78 (Different method name)
 // type A = interface { foo (_ : String, _ : B) -> B }
 // type B = interface { bar (_ : String, _ : A) -> B }
 // var x : A
 // var y : B := x
-assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("bar",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+assertFails(VarError, o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("bar",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
 
 // TEST 79 (Unknown return)
 // type A = interface { foo (_ : String, _ : B) -> B }
@@ -1794,7 +1796,7 @@ assertPasses(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("
 // type B = interface { foo (_ : String) -> B }
 // var x : A
 // var y : B := x
-assertFails(o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+assertFails(VarError, o0C(c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
 
 
 // TEST 82 (Multiple methods success)
@@ -1818,7 +1820,7 @@ assertPasses(o0C(c0N(t0D("A",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("
 // type B = interface { foo (_ : String, _ : B) -> B }
 // var x : A
 // var y : B := x
-assertFails(o0C(c0N(t0D("A",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))),m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil), VarError)
+assertFails(VarError, o0C(c0N(t0D("A",nil,i0C(c2N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("A(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil))),m0S(o1N(p0T("bar",o1N(i0D("_",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("A(0)",nil,nil)))))),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",c2N(i0D("_",o1N(l0R("String(0)",nil,nil))),i0D("_",o1N(l0R("B(0)",nil,nil)))),nil)),o1N(l0R("B(0)",nil,nil)))))),c2N(v4R("x",o1N(l0R("A(0)",nil,nil)),nil,nil),v4R("y",o1N(l0R("B(0)",nil,nil)),nil,o1N(l0R("x(0)",nil,nil)))))),nil))
 
 // TEST 84 (vartiant, union, intersection)
 // type A = String & Number
@@ -1830,45 +1832,45 @@ assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"&(1)",o1N(l0R("Nu
 
 // TEST 85 (Cannot use variant in type declaration)
 // type A = String | Number
-assertFails(o0C(o1N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("Number(0)",nil,nil)),nil))),nil), TypeDeclError)
+assertFails(TypeDeclError, o0C(o1N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"|(1)",o1N(l0R("Number(0)",nil,nil)),nil))),nil))
 
 // TEST 86 (Now uses value type after reassignment even if no declared type or intiial value)
 // var test
 // test := 3
 // def z : String = test
-assertFails(o0C(c0N(v4R("test",nil,nil,nil),c2N(a5N(l0R("test(0)",nil,nil),n0M(3)),d3F("z",o1N(l0R("String(0)",nil,nil)),nil,l0R("test(0)",nil,nil)))),nil), DefError)
+assertFails(DefError, o0C(c0N(v4R("test",nil,nil,nil),c2N(a5N(l0R("test(0)",nil,nil),n0M(3)),d3F("z",o1N(l0R("String(0)",nil,nil)),nil,l0R("test(0)",nil,nil)))),nil))
 
 // TEST 87 (Same as previous, but with dot requests and var z)
 // class test { var y }
 // def x = test
 // x.y := 3
 // var z : String := x.y
-assertFails(o0C(c0N(m0D(o1N(p0T("test",nil,nil)),nil,nil,o1N(o0C(o1N(v4R("y",nil,nil,nil)),nil))),c0N(d3F("x",nil,nil,l0R("test(0)",nil,nil)),c2N(a5N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil),n0M(3)),v4R("z",o1N(l0R("String(0)",nil,nil)),nil,o1N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil)))))),nil), VarError)
+assertFails(VarError, o0C(c0N(m0D(o1N(p0T("test",nil,nil)),nil,nil,o1N(o0C(o1N(v4R("y",nil,nil,nil)),nil))),c0N(d3F("x",nil,nil,l0R("test(0)",nil,nil)),c2N(a5N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil),n0M(3)),v4R("z",o1N(l0R("String(0)",nil,nil)),nil,o1N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil)))))),nil))
 
 // TEST 88 (Test 86 but with unconditional block causing false positive).
 // var test
 // if (true) then { test := 3 } else { test := "Never assigned" }
 // def z : String = test
-assertFails(o0C(c0N(v4R("test",nil,nil,nil),c2N(l0R("if(1)then(1)else(1)",c0N(l0R("true(0)",nil,nil),c2N(b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),n0M(3)))),b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),s0L("Never assigned")))))),nil),d3F("z",o1N(l0R("String(0)",nil,nil)),nil,l0R("test(0)",nil,nil)))),nil), DefError)
+assertFails(DefError, o0C(c0N(v4R("test",nil,nil,nil),c2N(l0R("if(1)then(1)else(1)",c0N(l0R("true(0)",nil,nil),c2N(b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),n0M(3)))),b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),s0L("Never assigned")))))),nil),d3F("z",o1N(l0R("String(0)",nil,nil)),nil,l0R("test(0)",nil,nil)))),nil))
 
 // TEST 89 (Flipped conditional)
 // var test
 // if (true) then { test := "Never assigned" } else { test := 3 }
 // def z : String = test
-assertFails(o0C(c0N(v4R("test",nil,nil,nil),c2N(l0R("if(1)then(1)else(1)",c0N(l0R("true(0)",nil,nil),c2N(b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),s0L("Never assigned")))),b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),n0M(3)))))),nil),d3F("z",o1N(l0R("String(0)",nil,nil)),nil,l0R("test(0)",nil,nil)))),nil), DefError)
+assertFails(DefError, o0C(c0N(v4R("test",nil,nil,nil),c2N(l0R("if(1)then(1)else(1)",c0N(l0R("true(0)",nil,nil),c2N(b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),s0L("Never assigned")))),b1K(nil,o1N(a5N(l0R("test(0)",nil,nil),n0M(3)))))),nil),d3F("z",o1N(l0R("String(0)",nil,nil)),nil,l0R("test(0)",nil,nil)))),nil))
 
 // TEST 90 (Test 87 but with unconditional block causing false positive).
 // class test { var y }
 // def x = test
 // if (true) then { x.y := 3 } else { x.y := "Never assigned" }
 // var z : String := x.y
-assertFails(o0C(c0N(m0D(o1N(p0T("test",nil,nil)),nil,nil,o1N(o0C(o1N(v4R("y",nil,nil,nil)),nil))),c0N(d3F("x",nil,nil,l0R("test(0)",nil,nil)),c2N(l0R("if(1)then(1)else(1)",c0N(l0R("true(0)",nil,nil),c2N(b1K(nil,o1N(a5N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil),n0M(3)))),b1K(nil,o1N(a5N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil),s0L("Never assigned")))))),nil),v4R("z",o1N(l0R("String(0)",nil,nil)),nil,o1N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil)))))),nil), VarError)
+assertFails(VarError, o0C(c0N(m0D(o1N(p0T("test",nil,nil)),nil,nil,o1N(o0C(o1N(v4R("y",nil,nil,nil)),nil))),c0N(d3F("x",nil,nil,l0R("test(0)",nil,nil)),c2N(l0R("if(1)then(1)else(1)",c0N(l0R("true(0)",nil,nil),c2N(b1K(nil,o1N(a5N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil),n0M(3)))),b1K(nil,o1N(a5N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil),s0L("Never assigned")))))),nil),v4R("z",o1N(l0R("String(0)",nil,nil)),nil,o1N(d0R(l0R("x(0)",nil,nil),"y(0)",nil,nil)))))),nil))
 
 // TEST 91 Number-typed variables use numeric +, not type intersection.
 // var left : Number := 1
 // var right : Number := 2
 // var sum : String := left + right
-assertFails(o0C(c0N(v4R("left",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),c2N(v4R("right",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(2))),v4R("sum",o1N(l0R("String(0)",nil,nil)),nil,o1N(d0R(l0R("left(0)",nil,nil),"+(1)",o1N(l0R("right(0)",nil,nil)),nil))))),nil), VarError)
+assertFails(VarError, o0C(c0N(v4R("left",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),c2N(v4R("right",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(2))),v4R("sum",o1N(l0R("String(0)",nil,nil)),nil,o1N(d0R(l0R("left(0)",nil,nil),"+(1)",o1N(l0R("right(0)",nil,nil)),nil))))),nil))
 
 // TEST 92 (Complex test in file: sample.grace)
 assertPasses(o0C(c0N(i0M("ast",i0D("ast",nil)),c0N(c0M(" This file makes use of many AST nodes"),c2N(d3F("x",nil,nil,o0C(c2N(v4R("y",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),m0D(c2N(p0T("foo",o1N(i0D("arg",o1N(l0R("Action(0)",nil,nil)))),nil),p0T("bar",o1N(i0D("n",nil)),nil)),o1N(l0R("String(0)",nil,nil)),nil,c2N(a5N(d0R(l0R("self(0)",nil,nil),"y(0)",nil,nil),d0R(d0R(l0R("arg(0)",nil,nil),"apply(0)",nil,nil),"+(1)",o1N(l0R("n(0)",nil,nil)),nil)),r3T(i0S(s4F("y ",c9A," "),l0R("y(0)",nil,nil),s0L(s4F("",c9E,""))))))),nil)),l0R("print(1)",o1N(d0R(l0R("x(0)",nil,nil),"foo(1)bar(1)",c2N(b1K(nil,o1N(n0M(2))),n0M(3)),nil)),nil)))),nil))
@@ -1932,7 +1934,7 @@ assertPasses(o0C(c0N(t0D("A",nil,d0R(l0R("String(0)",nil,nil),"&(1)",o1N(d0R(l0R
 // type KMore = K + Number
 // var k : K
 // def k2 : KMore = k
-assertFails(o0C(c0N(t0D("K",nil,i0C(o1N(m0S(o1N(p0T("test1",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil)))))),c0N(t0D("KMore",nil,d0R(l0R("K(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c2N(v4R("k",o1N(l0R("K(0)",nil,nil)),nil,nil),d3F("k2",o1N(l0R("KMore(0)",nil,nil)),nil,l0R("k(0)",nil,nil))))),nil), DefError)
+assertFails(DefError, o0C(c0N(t0D("K",nil,i0C(o1N(m0S(o1N(p0T("test1",c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c0N(i0D("_",o1N(l0R("K(0)",nil,nil))),c2N(i0D("_",o1N(l0R("K(0)",nil,nil))),i0D("_",o1N(l0R("K(0)",nil,nil)))))))))),nil)),o1N(l0R("K(0)",nil,nil)))))),c0N(t0D("KMore",nil,d0R(l0R("K(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c2N(v4R("k",o1N(l0R("K(0)",nil,nil)),nil,nil),d3F("k2",o1N(l0R("KMore(0)",nil,nil)),nil,l0R("k(0)",nil,nil))))),nil))
 
 // TEST 96 (Covariant/contravariant success)
 // type StringNum = String + Number // Some child of String.
@@ -1951,7 +1953,7 @@ assertPasses(o0C(c0N(t0D("StringNum",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N
 // type B = interface { foo(x : String) -> Object } // Violates covariant return
 // var b : B
 // def a : A = b
-assertFails(o0C(c0N(t0D("StringNum",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(c0M(" Some child of String."),c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Parent"),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("StringNum(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Violates contravariant param"),c2N(v4R("b",o1N(l0R("B(0)",nil,nil)),nil,nil),d3F("a",o1N(l0R("A(0)",nil,nil)),nil,l0R("b(0)",nil,nil))))))))),nil), DefError)
+assertFails(DefError, o0C(c0N(t0D("StringNum",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(c0M(" Some child of String."),c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Parent"),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("StringNum(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Violates contravariant param"),c2N(v4R("b",o1N(l0R("B(0)",nil,nil)),nil,nil),d3F("a",o1N(l0R("A(0)",nil,nil)),nil,l0R("b(0)",nil,nil))))))))),nil))
 
 // TEST 98 (Contravariant fail)
 // type StringNum = String + Number // Some child of String.
@@ -1959,7 +1961,7 @@ assertFails(o0C(c0N(t0D("StringNum",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(
 // type B = interface { foo(x : StringNum) -> String } // Violates contravariant param
 // var b : B
 // def a : A = b
-assertFails(o0C(c0N(t0D("StringNum",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(c0M(" Some child of String."),c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Parent"),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("Object(0)",nil,nil)))))),c0N(c0M(" Violates covariant return"),c2N(v4R("b",o1N(l0R("B(0)",nil,nil)),nil,nil),d3F("a",o1N(l0R("A(0)",nil,nil)),nil,l0R("b(0)",nil,nil))))))))),nil), DefError)
+assertFails(DefError, o0C(c0N(t0D("StringNum",nil,d0R(l0R("String(0)",nil,nil),"+(1)",o1N(l0R("Number(0)",nil,nil)),nil)),c0N(c0M(" Some child of String."),c0N(t0D("A",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("String(0)",nil,nil)))))),c0N(c0M(" Parent"),c0N(t0D("B",nil,i0C(o1N(m0S(o1N(p0T("foo",o1N(i0D("x",o1N(l0R("String(0)",nil,nil)))),nil)),o1N(l0R("Object(0)",nil,nil)))))),c0N(c0M(" Violates covariant return"),c2N(v4R("b",o1N(l0R("B(0)",nil,nil)),nil,nil),d3F("a",o1N(l0R("A(0)",nil,nil)),nil,l0R("b(0)",nil,nil))))))))),nil))
 
 // TEST ? put after lineups.
 // def x = { a -> a + 1 }
