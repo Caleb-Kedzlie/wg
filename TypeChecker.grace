@@ -295,20 +295,16 @@ class AnyType(nm) {
     }
 
     // Compare another type with this type accounting for possible coinductive relationships (interacting infinte dependencies).
-    method acceptsCoinductive(parent, subtype, meth, prevTrail) {
+    method acceptsCoinductive(parent, subtype, meth, trail) {
         if ((subtype.name == "Unknown") || (parent.name == "Unknown") || (parent == subtype)) then { return true }
 
-        // If at least one one is not custom type, fallback to base subtype comparison for all methods. Recursion lets this get checked at any point.
-        if (!subtype.selfOrInterface || !parent.selfOrInterface) then {
-            return acceptsBase(parent, subtype, meth, prevTrail)
-        }
-
         // Copy the trail so it does not mutate other branches.
-        def trail = collections.list(prevTrail)
         def pair = "({parent.declaredName}, {subtype.declaredName})"
         // If result pair is in the trail, then it has already seen this pair in a dependency loop, hence it is an equivalent coinductive structure.
         if (trail.contains { p -> p == pair }) then { return true }
         trail.add(pair)
+        // Track added pair index to remove later instead of copying the trail at the start. Other branches still do not see this pair, but it is faster.
+        def pairIndex = trail.size
 
         // If the subtype does not have a matching method, then it is not equivalent.
         if (!subtype.hasMethod(meth.name)) then { return false }
@@ -326,38 +322,17 @@ class AnyType(nm) {
         // Do the same coinductive recursion as the return types, but for every pair of parameter types.
         var paramsMatch : Boolean := true
         paramsParent.zip(paramsSubtype) do { par, sub ->
-            // Parent and subtype parameters are switched order because the parameters are contravariant (can be wider subtype).
-            paramsMatch := paramsMatch && compareMethods(sub, par, compareCoinductive(trail))
-            // Optimisation to stop if it reaches an invalid subtype for a parameter-argument pair.
-            if (!paramsMatch) then { return false }
+            // Big optimisation to skip checking this parameter if it matches the return type in both parent and subtype.
+            if (!((par.declaredName == returnParent.declaredName) && (sub.declaredName == returnSubtype.declaredName))) then { 
+                // Parent and subtype parameters are switched order because the parameters are contravariant (can be wider subtype).
+                paramsMatch := paramsMatch && compareMethods(sub, par, compareCoinductive(trail))
+                // Optimisation to stop if it reaches an invalid subtype for a parameter-argument pair.
+                if (!paramsMatch) then { return false }
+            }
         }
+        // An optimisation to remove the pair once searched, instead of making copies of the trail prevent recursive branch interaction.
+        trail.removeAt(pairIndex)
         return paramsMatch
-    }
-
-    // Compare another type with this type to check if matching/subtype. Now reuses the trail to prevent subtype checks from scratch between base and declared types.
-    method acceptsBase(parent, subtype, meth, trail) {
-        // Unknown always subtypes and the same object subtypes.
-        if ((subtype.name == "Unknown") || (parent.name == "Unknown") || (parent == subtype)) then { return true }
-
-        // The subtype should at least have the methods of the parent type.
-        if (!subtype.hasMethod(meth.name)) then { return false }
-        def subtypeMeth = subtype.getMethod(meth.name)
-
-        // Covariant comparison of the parent return type against subtype. If either type is base then compareCoinductive returns to acceptsBase.
-        if (!compareMethods(meth.returnType, subtypeMeth.returnType, compareCoinductive(trail))) then { return false }
-
-        // Contravariant comparison of the subtype method params with the parent.
-        def paramsParent = meth.paramTypes
-        def paramsSubtype = subtypeMeth.paramTypes
-        if (paramsParent.size != paramsSubtype.size) then { return false }
-        var paramsMatch : Boolean := true
-        paramsParent.zip(paramsSubtype) do { par, sub ->
-            // Compare params in order. If either type is base then compareCoinductive returns to acceptsBase.
-            paramsMatch := paramsMatch && compareMethods(sub, par, compareCoinductive(trail))
-            if (!paramsMatch) then { return false }
-        }
-        // Succeeded structural subtyping method checks. The names of types do not have to match.
-        return true
     }
 }
 
@@ -618,6 +593,7 @@ class DotRequestNode(rec, meth, args, generics) {
         def receiverType = receiver.inferType(env)
         // If it is an imported type, it is unknown whether the method exists or what it returns.
         if ((receiverType.name == "Import") || (receiverType.name == "Unknown")) then { return unknownType }
+        
         def argumentTypes = arguments.map { a -> 
             a.inferType(env)
         }
@@ -683,7 +659,7 @@ method addDeclarations(env, body) {
 // Either a singleton object (def x = object {}), a class (class x {}) or the outer-most scope of the entire program.
 class ObjectNode(bdy, anns) {
     def name is public = "object"
-    def body is public = bdy.without { x -> x.name == "comment" }
+    def body is public = bdy.without { x -> x.name == "comment" } // Remove comments from body.
     def annotations is public = anns
     var outer is public := true
 
@@ -1829,10 +1805,7 @@ assertFails(VarError, o0C(c0N(v4R("left",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n
 // TEST 92 (Complex test in file: sample.grace)
 assertPasses(o0C(c0N(i0M("ast",i0D("ast",nil)),c0N(c0M(" This file makes use of many AST nodes"),c2N(d3F("x",nil,nil,o0C(c2N(v4R("y",o1N(l0R("Number(0)",nil,nil)),nil,o1N(n0M(1))),m0D(c2N(p0T("foo",o1N(i0D("arg",o1N(l0R("Action(0)",nil,nil)))),nil),p0T("bar",o1N(i0D("n",nil)),nil)),o1N(l0R("String(0)",nil,nil)),nil,c2N(a5N(d0R(l0R("self(0)",nil,nil),"y(0)",nil,nil),d0R(d0R(l0R("arg(0)",nil,nil),"apply(0)",nil,nil),"+(1)",o1N(l0R("n(0)",nil,nil)),nil)),r3T(i0S(s4F("y ",c9A," "),l0R("y(0)",nil,nil),s0L(s4F("",c9E,""))))))),nil)),l0R("print(1)",o1N(d0R(l0R("x(0)",nil,nil),"foo(1)bar(1)",c2N(b1K(nil,o1N(n0M(2))),n0M(3)),nil)),nil)))),nil))
 
-// TEST 93 (Benchmark tests with many types)
-// type A = Number & Boolean
-// type B = String + Number & A
-// type C = A & B
+// TEST 93 (Benchmark tests with many types, doubling branches each time)
 // type LeftA = interface { next(_ : LeftB) -> LeftB }
 // type LeftB = interface { next(_ : LeftC) -> LeftC }
 // type LeftC = interface { next(_ : LeftD) -> LeftD }
