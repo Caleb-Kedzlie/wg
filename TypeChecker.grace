@@ -163,7 +163,11 @@ class NewMethod(nm, params, rType) {
     var paramTypes is public := params
     var returnType is public := rType
     def paramNames = "{ params.map { p -> p.name }.join(", ") }"
-    def fullName is public = "{name}({paramNames}) -> {returnType.name}"
+    method fullName { 
+        def cleanName = name.substringFrom(1)to(name.size - 3) 
+        return "{cleanName}({paramNames}) -> {rType.declaredName}" 
+    }
+    
 
     // Checks if the two methods are identical. Compares name, args and return type. Used when making union types. 
     method methodsMatch(otherName, argTypes, retType) {
@@ -196,7 +200,7 @@ class NewMethod(nm, params, rType) {
     }
 
     method asString {
-        return "{name}->{returnType.declaredName}"
+        return fullName
     }
 }
 
@@ -299,7 +303,7 @@ class AnyType(nm) {
         if ((subtype.name == "Unknown") || (parent.name == "Unknown") || (parent == subtype)) then { return true }
 
         // Copy the trail so it does not mutate other branches.
-        def pair = "({parent.declaredName}, {subtype.declaredName})"
+        def pair = "({parent.asString}, {subtype.asString})"
         // If result pair is in the trail, then it has already seen this pair in a dependency loop, hence it is an equivalent coinductive structure.
         if (trail.contains { p -> p == pair }) then { return true }
         trail.add(pair)
@@ -543,8 +547,9 @@ method reassignChangesType(env, cleanName, args, getter, setter) {
 class LexicalRequestNode(meth, args, generics) {
     def name is public = "lexical request"
     def methodName is public = meth
-    def cleanName is public = meth.substringFrom(1)to(methodName.size - 3) // No arguments e.g. "foo(1)" becomes "foo".
+    def cleanName is public = meth.substringFrom(1)to(meth.size - 3) // No arguments e.g. "foo(1)" becomes "foo".
     def arguments is public = args
+    def declaredName is public = "{cleanName}({arguments.map {a -> a.name }})" // Only used for checking methods exist in first pass of addDeclarations
     def genericParams is public = generics // Unused currently.
 
     // Checks the method exists in the environment and returns the return type of it.
@@ -956,7 +961,7 @@ class InterfaceNode(bdy) {
         def interfaceType = AnyType("Interface")
         body.do { sig ->
             // Convert method signatures into NewMethod format then add to the environment.
-            def meth = sig.asMethod(env)
+            def meth = sig.asMethod
             interfaceType.addMethod(meth)
         }
         return interfaceType
@@ -973,7 +978,7 @@ class MethodSignatureNode(parts, rType) {
     def lexicalReturnType is public = if (isNil(rType)) then { unknownType } else { rType.first } // unknownType if nil.
 
     // Convert this method signature into a NewMethod object for typechecking interfaces.
-    method asMethod(env) {
+    method asMethod {
         return NewMethod(declaredName, lexicalParams, lexicalReturnType)
     }
 }
@@ -1003,6 +1008,7 @@ class ImportNode(src, bind) {
     def source is public = src
     def declaredName is public = bind.declaredName
     def declaredType is public = bind.declaredType
+
     method inferType(env) {
         return doneType
     }
