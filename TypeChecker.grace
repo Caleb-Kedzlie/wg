@@ -303,9 +303,11 @@ class AnyType(nm) {
         if ((subtype.name == "Unknown") || (parent.name == "Unknown") || (parent == subtype)) then { return true }
 
         // Copy the trail so it does not mutate other branches.
-        def pair = "({parent.asString}, {subtype.asString})"
-        // If result pair is in the trail, then it has already seen this pair in a dependency loop, hence it is an equivalent coinductive structure.
-        if (trail.contains { p -> p == pair }) then { return true }
+        def parentString = parent.asString
+        def subtypeString = subtype.asString
+        def pair = "({parentString}, {subtypeString})"
+        // If result pair is in the trail (or same type), then it has already seen this pair in a dependency loop, hence it is an equivalent coinductive structure.
+        if (trail.contains { p -> p == pair } || (parentString == subtypeString)) then { return true }
         trail.add(pair)
         // Track added pair index to remove later instead of copying the trail at the start. Other branches still do not see this pair, but it is faster.
         def pairIndex = trail.size
