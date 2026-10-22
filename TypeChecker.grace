@@ -1274,7 +1274,7 @@ method assertFails(ast) {
 // Try-catch to run AST then throw a FailedError if it did not throw the expected TypeError (or derivative) exception.
 method assertFails(error, ast) {
     try {
-        ast.checkType(Environment(BaseEnvironment), unknownType)
+        ast.checkType(BaseEnvironment, unknownType)
         FailedError.raise "No '{error}' thrown"
     } catch { e : error ->
         if (!onlyPrintFails) then {
@@ -1293,7 +1293,7 @@ method assertFails(error, ast) {
 // Tests that succeed only if no TypeError thrown. Specific error types not needed as none should occur.
 method assertPasses(ast) {
     try {
-        ast.checkType(Environment(BaseEnvironment), unknownType)
+        ast.checkType(BaseEnvironment, unknownType)
         if (!onlyPrintFails) then {
             print "(AP) PASSED: Test{testNumber} did not throw 'TypeError'"
         }
