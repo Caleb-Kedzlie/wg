@@ -149,6 +149,9 @@ method i0M(source, binding) { ImportNode(source, binding) }
 // Dialect Statement that extends the Grace language using source string, e.g. dialect "name"
 method d0S(source) { DialectNode(source) }
 
+// Inherit statements are not needed for structural typechecking, but InheritNode could be done in future work alongside generics.
+method i0H(name, parts) { unknownType }
+
 
 //
 // #### IMPLEMENTATION ####
